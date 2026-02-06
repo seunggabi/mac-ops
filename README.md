@@ -238,7 +238,6 @@ mac-ops/
 ├── launchd/                       # launchd agents
 ├── scripts/                       # Utility scripts
 ├── demo/                          # Demo and example files
-├── Formula/                       # Homebrew formula
 ├── .github/                       # GitHub workflows and templates
 └── tests/                         # Test suites
     ├── test-trash.zsh             # 18 trash system tests
