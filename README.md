@@ -38,7 +38,7 @@ cd mac-ops
 chmod +x bin/mac-ops
 ```
 
-### Homebrew
+### Homebrew ([homebrew-mac-ops](https://github.com/seunggabi/homebrew-mac-ops))
 
 ```bash
 brew tap seunggabi/mac-ops
