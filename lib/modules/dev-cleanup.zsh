@@ -1,11 +1,11 @@
 # =============================================================================
-# mac-ops: 개발도구 캐시 정리 모듈
-# Xcode, npm, yarn, pnpm, pip, gradle, CocoaPods 등 개발도구 캐시 통합 정리
+# mac-ops: Developer tools cache cleanup module
+# Integrated cleanup for Xcode, npm, yarn, pnpm, pip, gradle, CocoaPods, etc.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Xcode 캐시 정리
-# DerivedData, Archives, CoreSimulator 캐시
+# Xcode cache cleanup
+# DerivedData, Archives, CoreSimulator cache
 # -----------------------------------------------------------------------------
 _mac_ops_dev_xcode() {
   local xcode_derived="${HOME}/Library/Developer/Xcode/DerivedData"
@@ -14,41 +14,41 @@ _mac_ops_dev_xcode() {
 
   local has_xcode=false
 
-  # Xcode 관련 디렉토리 중 하나라도 있으면 설치된 것으로 간주
+  # Consider Xcode installed if any related directory exists
   if [[ -d "${xcode_derived}" || -d "${xcode_archives}" || -d "${xcode_simulator}" ]]; then
     has_xcode=true
   fi
 
   if [[ "${has_xcode}" == "false" ]]; then
-    mac_ops_log_debug "Xcode가 설치되지 않았습니다. 건너뜁니다."
+    mac_ops_log_debug "Xcode is not installed. Skipping."
     return 0
   fi
 
-  mac_ops_log_info "Xcode 캐시 정리 중..."
+  mac_ops_log_info "Cleaning Xcode cache..."
 
-  # DerivedData 전체 정리
+  # Clean all DerivedData
   if [[ -d "${xcode_derived}" ]]; then
     local derived_size
     derived_size=$(mac_ops_get_dir_size "${xcode_derived}")
 
     if [[ ${derived_size} -gt 0 ]]; then
       if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-        mac_ops_log_info "[DRY_RUN] 정리 예정: ${xcode_derived} ($(mac_ops_format_bytes ${derived_size}))"
+        mac_ops_log_info "[DRY_RUN] Will clean: ${xcode_derived} ($(mac_ops_format_bytes ${derived_size}))"
       else
-        # DerivedData 내 모든 항목을 trash로 이동
+        # Move all items in DerivedData to trash
         for item in "${xcode_derived}"/*; do
           [[ ! -e "${item}" ]] && continue
-          mac_ops_trash_move "${item}" "Xcode DerivedData 정리" "dev-cleanup"
+          mac_ops_trash_move "${item}" "Xcode DerivedData cleanup" "dev-cleanup"
         done
 
         MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + derived_size))
         MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-        mac_ops_log_info "Xcode DerivedData 정리 완료: $(mac_ops_format_bytes ${derived_size})"
+        mac_ops_log_info "Xcode DerivedData cleanup completed: $(mac_ops_format_bytes ${derived_size})"
       fi
     fi
   fi
 
-  # Archives 중 90일 이상 된 것 정리
+  # Clean Archives older than 90 days
   if [[ -d "${xcode_archives}" ]]; then
     local now_epoch
     local ninety_days_ago
@@ -58,7 +58,7 @@ _mac_ops_dev_xcode() {
     local item_size
 
     now_epoch=$(date +%s)
-    ninety_days_ago=$((now_epoch - 7776000))  # 90일 = 7776000초
+    ninety_days_ago=$((now_epoch - 7776000))  # 90 days = 7776000 seconds
 
     for archive in "${xcode_archives}"/*; do
       [[ ! -d "${archive}" ]] && continue
@@ -71,9 +71,9 @@ _mac_ops_dev_xcode() {
         archive_count=$((archive_count + 1))
 
         if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-          mac_ops_log_info "[DRY_RUN] 정리 예정: ${archive} ($(mac_ops_format_bytes ${item_size}))"
+          mac_ops_log_info "[DRY_RUN] Will clean: ${archive} ($(mac_ops_format_bytes ${item_size}))"
         else
-          mac_ops_trash_move "${archive}" "90일 이상 된 Xcode Archive" "dev-cleanup"
+          mac_ops_trash_move "${archive}" "Xcode Archive older than 90 days" "dev-cleanup"
         fi
       fi
     done
@@ -81,27 +81,27 @@ _mac_ops_dev_xcode() {
     if [[ ${archive_count} -gt 0 && "${MAC_OPS_DRY_RUN}" != "true" ]]; then
       MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + archive_size))
       MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + archive_count))
-      mac_ops_log_info "Xcode Archives 정리 완료: ${archive_count}개, $(mac_ops_format_bytes ${archive_size})"
+      mac_ops_log_info "Xcode Archives cleanup completed: ${archive_count} items, $(mac_ops_format_bytes ${archive_size})"
     fi
   fi
 
-  # CoreSimulator Caches 정리
+  # CoreSimulator Caches cleanup
   if [[ -d "${xcode_simulator}" ]]; then
     local sim_size
     sim_size=$(mac_ops_get_dir_size "${xcode_simulator}")
 
     if [[ ${sim_size} -gt 0 ]]; then
       if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-        mac_ops_log_info "[DRY_RUN] 정리 예정: ${xcode_simulator} ($(mac_ops_format_bytes ${sim_size}))"
+        mac_ops_log_info "[DRY_RUN] Will clean: ${xcode_simulator} ($(mac_ops_format_bytes ${sim_size}))"
       else
         for item in "${xcode_simulator}"/*; do
           [[ ! -e "${item}" ]] && continue
-          mac_ops_trash_move "${item}" "Xcode Simulator 캐시 정리" "dev-cleanup"
+          mac_ops_trash_move "${item}" "Xcode Simulator cache cleanup" "dev-cleanup"
         done
 
         MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + sim_size))
         MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-        mac_ops_log_info "Xcode Simulator 캐시 정리 완료: $(mac_ops_format_bytes ${sim_size})"
+        mac_ops_log_info "Xcode Simulator cache cleanup completed: $(mac_ops_format_bytes ${sim_size})"
       fi
     fi
   fi
@@ -110,19 +110,19 @@ _mac_ops_dev_xcode() {
 }
 
 # -----------------------------------------------------------------------------
-# npm 캐시 정리
-# ~/.npm/_cacache 전체
+# npm cache cleanup
+# ~/.npm/_cacache all
 # -----------------------------------------------------------------------------
 _mac_ops_dev_npm() {
   if ! command -v npm &>/dev/null; then
-    mac_ops_log_debug "npm이 설치되지 않았습니다. 건너뜁니다."
+    mac_ops_log_debug "npm is not installed. Skipping."
     return 0
   fi
 
   local npm_cache="${HOME}/.npm/_cacache"
 
   if [[ ! -d "${npm_cache}" ]]; then
-    mac_ops_log_debug "npm 캐시 디렉토리가 없습니다."
+    mac_ops_log_debug "npm cache directory does not exist."
     return 0
   fi
 
@@ -134,38 +134,38 @@ _mac_ops_dev_npm() {
   fi
 
   if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-    mac_ops_log_info "[DRY_RUN] npm 캐시 정리 예정: ${npm_cache} ($(mac_ops_format_bytes ${cache_size}))"
+    mac_ops_log_info "[DRY_RUN] Will clean npm cache: ${npm_cache} ($(mac_ops_format_bytes ${cache_size}))"
     return 0
   fi
 
-  mac_ops_log_info "npm 캐시 정리 중..."
+  mac_ops_log_info "Cleaning npm cache..."
 
   for item in "${npm_cache}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "npm 캐시 정리" "dev-cleanup"
+    mac_ops_trash_move "${item}" "npm cache cleanup" "dev-cleanup"
   done
 
   MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
   MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "npm 캐시 정리 완료: $(mac_ops_format_bytes ${cache_size})"
+  mac_ops_log_info "npm cache cleanup completed: $(mac_ops_format_bytes ${cache_size})"
 
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# yarn 캐시 정리
-# ~/.yarn/cache 전체
+# yarn cache cleanup
+# ~/.yarn/cache all
 # -----------------------------------------------------------------------------
 _mac_ops_dev_yarn() {
   if ! command -v yarn &>/dev/null; then
-    mac_ops_log_debug "yarn이 설치되지 않았습니다. 건너뜁니다."
+    mac_ops_log_debug "yarn is not installed. Skipping."
     return 0
   fi
 
   local yarn_cache="${HOME}/.yarn/cache"
 
   if [[ ! -d "${yarn_cache}" ]]; then
-    mac_ops_log_debug "yarn 캐시 디렉토리가 없습니다."
+    mac_ops_log_debug "yarn cache directory does not exist."
     return 0
   fi
 
@@ -177,38 +177,38 @@ _mac_ops_dev_yarn() {
   fi
 
   if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-    mac_ops_log_info "[DRY_RUN] yarn 캐시 정리 예정: ${yarn_cache} ($(mac_ops_format_bytes ${cache_size}))"
+    mac_ops_log_info "[DRY_RUN] Will clean yarn cache: ${yarn_cache} ($(mac_ops_format_bytes ${cache_size}))"
     return 0
   fi
 
-  mac_ops_log_info "yarn 캐시 정리 중..."
+  mac_ops_log_info "Cleaning yarn cache..."
 
   for item in "${yarn_cache}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "yarn 캐시 정리" "dev-cleanup"
+    mac_ops_trash_move "${item}" "yarn cache cleanup" "dev-cleanup"
   done
 
   MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
   MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "yarn 캐시 정리 완료: $(mac_ops_format_bytes ${cache_size})"
+  mac_ops_log_info "yarn cache cleanup completed: $(mac_ops_format_bytes ${cache_size})"
 
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# pnpm 캐시 정리
-# ~/.pnpm-store 전체
+# pnpm cache cleanup
+# ~/.pnpm-store all
 # -----------------------------------------------------------------------------
 _mac_ops_dev_pnpm() {
   if ! command -v pnpm &>/dev/null; then
-    mac_ops_log_debug "pnpm이 설치되지 않았습니다. 건너뜁니다."
+    mac_ops_log_debug "pnpm is not installed. Skipping."
     return 0
   fi
 
   local pnpm_store="${HOME}/.pnpm-store"
 
   if [[ ! -d "${pnpm_store}" ]]; then
-    mac_ops_log_debug "pnpm store 디렉토리가 없습니다."
+    mac_ops_log_debug "pnpm store directory does not exist."
     return 0
   fi
 
@@ -220,38 +220,38 @@ _mac_ops_dev_pnpm() {
   fi
 
   if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-    mac_ops_log_info "[DRY_RUN] pnpm store 정리 예정: ${pnpm_store} ($(mac_ops_format_bytes ${store_size}))"
+    mac_ops_log_info "[DRY_RUN] Will clean pnpm store: ${pnpm_store} ($(mac_ops_format_bytes ${store_size}))"
     return 0
   fi
 
-  mac_ops_log_info "pnpm store 정리 중..."
+  mac_ops_log_info "Cleaning pnpm store..."
 
   for item in "${pnpm_store}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "pnpm store 정리" "dev-cleanup"
+    mac_ops_trash_move "${item}" "pnpm store cleanup" "dev-cleanup"
   done
 
   MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + store_size))
   MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "pnpm store 정리 완료: $(mac_ops_format_bytes ${store_size})"
+  mac_ops_log_info "pnpm store cleanup completed: $(mac_ops_format_bytes ${store_size})"
 
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# pip 캐시 정리
-# ~/.cache/pip 전체
+# pip cache cleanup
+# ~/.cache/pip all
 # -----------------------------------------------------------------------------
 _mac_ops_dev_pip() {
   if ! command -v pip &>/dev/null && ! command -v pip3 &>/dev/null; then
-    mac_ops_log_debug "pip이 설치되지 않았습니다. 건너뜁니다."
+    mac_ops_log_debug "pip is not installed. Skipping."
     return 0
   fi
 
   local pip_cache="${HOME}/.cache/pip"
 
   if [[ ! -d "${pip_cache}" ]]; then
-    mac_ops_log_debug "pip 캐시 디렉토리가 없습니다."
+    mac_ops_log_debug "pip cache directory does not exist."
     return 0
   fi
 
@@ -263,38 +263,38 @@ _mac_ops_dev_pip() {
   fi
 
   if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-    mac_ops_log_info "[DRY_RUN] pip 캐시 정리 예정: ${pip_cache} ($(mac_ops_format_bytes ${cache_size}))"
+    mac_ops_log_info "[DRY_RUN] Will clean pip cache: ${pip_cache} ($(mac_ops_format_bytes ${cache_size}))"
     return 0
   fi
 
-  mac_ops_log_info "pip 캐시 정리 중..."
+  mac_ops_log_info "Cleaning pip cache..."
 
   for item in "${pip_cache}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "pip 캐시 정리" "dev-cleanup"
+    mac_ops_trash_move "${item}" "pip cache cleanup" "dev-cleanup"
   done
 
   MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
   MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "pip 캐시 정리 완료: $(mac_ops_format_bytes ${cache_size})"
+  mac_ops_log_info "pip cache cleanup completed: $(mac_ops_format_bytes ${cache_size})"
 
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# gradle 캐시 정리
-# ~/.gradle/caches 전체
+# gradle cache cleanup
+# ~/.gradle/caches all
 # -----------------------------------------------------------------------------
 _mac_ops_dev_gradle() {
   if ! command -v gradle &>/dev/null; then
-    mac_ops_log_debug "gradle이 설치되지 않았습니다. 건너뜁니다."
+    mac_ops_log_debug "gradle is not installed. Skipping."
     return 0
   fi
 
   local gradle_cache="${HOME}/.gradle/caches"
 
   if [[ ! -d "${gradle_cache}" ]]; then
-    mac_ops_log_debug "gradle 캐시 디렉토리가 없습니다."
+    mac_ops_log_debug "gradle cache directory does not exist."
     return 0
   fi
 
@@ -306,38 +306,38 @@ _mac_ops_dev_gradle() {
   fi
 
   if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-    mac_ops_log_info "[DRY_RUN] gradle 캐시 정리 예정: ${gradle_cache} ($(mac_ops_format_bytes ${cache_size}))"
+    mac_ops_log_info "[DRY_RUN] Will clean gradle cache: ${gradle_cache} ($(mac_ops_format_bytes ${cache_size}))"
     return 0
   fi
 
-  mac_ops_log_info "gradle 캐시 정리 중..."
+  mac_ops_log_info "Cleaning gradle cache..."
 
   for item in "${gradle_cache}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "gradle 캐시 정리" "dev-cleanup"
+    mac_ops_trash_move "${item}" "gradle cache cleanup" "dev-cleanup"
   done
 
   MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
   MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "gradle 캐시 정리 완료: $(mac_ops_format_bytes ${cache_size})"
+  mac_ops_log_info "gradle cache cleanup completed: $(mac_ops_format_bytes ${cache_size})"
 
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# CocoaPods 캐시 정리
-# ~/Library/Caches/CocoaPods 전체
+# CocoaPods cache cleanup
+# ~/Library/Caches/CocoaPods all
 # -----------------------------------------------------------------------------
 _mac_ops_dev_cocoapods() {
   if ! command -v pod &>/dev/null; then
-    mac_ops_log_debug "CocoaPods가 설치되지 않았습니다. 건너뜁니다."
+    mac_ops_log_debug "CocoaPods is not installed. Skipping."
     return 0
   fi
 
   local pod_cache="${HOME}/Library/Caches/CocoaPods"
 
   if [[ ! -d "${pod_cache}" ]]; then
-    mac_ops_log_debug "CocoaPods 캐시 디렉토리가 없습니다."
+    mac_ops_log_debug "CocoaPods cache directory does not exist."
     return 0
   fi
 
@@ -349,32 +349,32 @@ _mac_ops_dev_cocoapods() {
   fi
 
   if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-    mac_ops_log_info "[DRY_RUN] CocoaPods 캐시 정리 예정: ${pod_cache} ($(mac_ops_format_bytes ${cache_size}))"
+    mac_ops_log_info "[DRY_RUN] Will clean CocoaPods cache: ${pod_cache} ($(mac_ops_format_bytes ${cache_size}))"
     return 0
   fi
 
-  mac_ops_log_info "CocoaPods 캐시 정리 중..."
+  mac_ops_log_info "Cleaning CocoaPods cache..."
 
   for item in "${pod_cache}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "CocoaPods 캐시 정리" "dev-cleanup"
+    mac_ops_trash_move "${item}" "CocoaPods cache cleanup" "dev-cleanup"
   done
 
   MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
   MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "CocoaPods 캐시 정리 완료: $(mac_ops_format_bytes ${cache_size})"
+  mac_ops_log_info "CocoaPods cache cleanup completed: $(mac_ops_format_bytes ${cache_size})"
 
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# 개발도구 통합 정리 메인 함수
-# 모든 서브함수를 순차 호출
+# Developer tools integrated cleanup main function
+# Call all sub-functions sequentially
 # -----------------------------------------------------------------------------
 mac_ops_dev_cleanup() {
-  mac_ops_log_info "개발도구 캐시 정리를 시작합니다..."
+  mac_ops_log_info "Starting developer tools cache cleanup..."
 
-  # 각 개발도구별 정리 실행
+  # Execute cleanup for each development tool
   _mac_ops_dev_xcode
   _mac_ops_dev_npm
   _mac_ops_dev_yarn
@@ -383,6 +383,6 @@ mac_ops_dev_cleanup() {
   _mac_ops_dev_gradle
   _mac_ops_dev_cocoapods
 
-  mac_ops_log_info "개발도구 캐시 정리 완료"
+  mac_ops_log_info "Developer tools cache cleanup completed"
   return 0
 }

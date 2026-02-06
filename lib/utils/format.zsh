@@ -1,9 +1,9 @@
 # lib/utils/format.zsh
-# 포맷팅 및 출력 유틸리티
+# Formatting and output utilities
 
-# 바이트를 사람이 읽기 좋은 형식으로 변환
-# 인자: bytes
-# 반환: stdout에 포맷된 문자열 출력
+# Convert bytes to human-readable format
+# Args: bytes
+# Returns: Outputs formatted string to stdout
 mac_ops_format_bytes() {
   local bytes="$1"
 
@@ -23,9 +23,9 @@ mac_ops_format_bytes() {
   fi
 }
 
-# 초를 사람이 읽기 좋은 형식으로 변환
-# 인자: seconds
-# 반환: stdout에 포맷된 문자열 출력
+# Convert seconds to human-readable format
+# Args: seconds
+# Returns: Outputs formatted string to stdout
 mac_ops_format_duration() {
   local seconds="$1"
 
@@ -72,8 +72,8 @@ mac_ops_color_reset() {
   echo "\033[0m"
 }
 
-# 헤더 출력 (구분선 + 제목)
-# 인자: title
+# Print header (separator + title)
+# Args: title
 mac_ops_print_header() {
   local title="$1"
 
@@ -84,8 +84,8 @@ mac_ops_print_header() {
   echo ""
 }
 
-# 실행 요약 출력
-# 인자: cleaned_count, cleaned_bytes, killed_procs
+# Print execution summary
+# Args: cleaned_count, cleaned_bytes, killed_procs
 mac_ops_print_summary() {
   local cleaned_count="$1"
   local cleaned_bytes="$2"
@@ -95,31 +95,31 @@ mac_ops_print_summary() {
   formatted_size=$(mac_ops_format_bytes "$cleaned_bytes")
 
   echo ""
-  echo "$(mac_ops_color_bold "=== 실행 요약 ===")"
+  echo "$(mac_ops_color_bold "=== Execution Summary ===")"
 
   if [[ -n "$cleaned_count" && "$cleaned_count" != "0" ]]; then
-    echo "$(mac_ops_color_green "✓") 정리된 파일: ${cleaned_count}개 (${formatted_size})"
+    echo "$(mac_ops_color_green "✓") Files cleaned: ${cleaned_count} items (${formatted_size})"
   fi
 
   if [[ -n "$killed_procs" && "$killed_procs" != "0" ]]; then
-    echo "$(mac_ops_color_green "✓") 종료된 프로세스: ${killed_procs}개"
+    echo "$(mac_ops_color_green "✓") Processes terminated: ${killed_procs} items"
   fi
 
   if [[ "$cleaned_count" == "0" && "$killed_procs" == "0" ]]; then
-    echo "$(mac_ops_color_blue "ℹ") 정리할 항목이 없습니다"
+    echo "$(mac_ops_color_blue "ℹ") No items to clean"
   fi
 
   echo ""
 }
 
-# 테이블 행 출력 (정렬된 3열)
-# 인자: col1, col2, col3
+# Print table row (aligned 3 columns)
+# Args: col1, col2, col3
 mac_ops_print_table_row() {
   local col1="$1"
   local col2="$2"
   local col3="$3"
 
-  # 각 열의 너비 설정
+  # Set width for each column
   local width1=30
   local width2=40
   local width3=20

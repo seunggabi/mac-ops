@@ -1,9 +1,9 @@
 # =============================================================================
-# mac-ops: 설정 로더
-# 기본 경로 정의 및 config.plist 로드
+# mac-ops: Configuration loader
+# Default path definitions and config.plist loading
 # =============================================================================
 
-# --- 기본 경로 ---
+# --- Default paths ---
 MAC_OPS_HOME="${MAC_OPS_HOME:-${HOME}/.mac-ops}"
 MAC_OPS_TRASH_DIR="${MAC_OPS_TRASH_DIR:-${MAC_OPS_HOME}/.trash}"
 MAC_OPS_META_DIR="${MAC_OPS_META_DIR:-${MAC_OPS_HOME}/.metadata}"
@@ -11,17 +11,17 @@ MAC_OPS_LOG_DIR="${MAC_OPS_LOG_DIR:-${MAC_OPS_HOME}/.logs}"
 MAC_OPS_LOCK_FILE="${MAC_OPS_LOCK_FILE:-${MAC_OPS_HOME}/mac-ops.lock}"
 MAC_OPS_CONFIG_FILE="${MAC_OPS_CONFIG_FILE:-${MAC_OPS_HOME}/config.plist}"
 
-# --- 기본 플래그 ---
+# --- Default flags ---
 MAC_OPS_DRY_RUN=${MAC_OPS_DRY_RUN:-false}
 MAC_OPS_VERBOSE=${MAC_OPS_VERBOSE:-false}
 MAC_OPS_FORCE=${MAC_OPS_FORCE:-false}
 MAC_OPS_SCHEDULED=${MAC_OPS_SCHEDULED:-false}
 
-# --- 기본 설정값 ---
+# --- Default configuration values ---
 MAC_OPS_TRASH_RETENTION_HOURS=${MAC_OPS_TRASH_RETENTION_HOURS:-72}
 
 # -----------------------------------------------------------------------------
-# 필요한 디렉토리 생성
+# Create required directories
 # -----------------------------------------------------------------------------
 mac_ops_init_dirs() {
   local dirs=(
@@ -35,9 +35,14 @@ mac_ops_init_dirs() {
     if [[ ! -d "${dir}" ]]; then
       mkdir -p "${dir}" 2>/dev/null
       if [[ $? -ne 0 ]]; then
-        print -- "[ERROR] 디렉토리 생성 실패: ${dir}" >&2
+        print -- "[ERROR] Failed to create directory: ${dir}" >&2
         return 1
       fi
+    fi
+
+    # Set log directory to be accessible only by owner
+    if [[ "${dir}" == "${MAC_OPS_LOG_DIR}" ]]; then
+      chmod 700 "${dir}" 2>/dev/null
     fi
   done
 
@@ -45,22 +50,22 @@ mac_ops_init_dirs() {
 }
 
 # -----------------------------------------------------------------------------
-# config.plist에서 설정 로드 (plutil 사용)
-# 파일이 없으면 기본값을 유지한다.
+# Load configuration from config.plist (using plutil)
+# If file does not exist, keep default values.
 # -----------------------------------------------------------------------------
 mac_ops_load_config() {
-  # config.plist가 없으면 기본값 사용
+  # If config.plist does not exist, use default values
   if [[ ! -f "${MAC_OPS_CONFIG_FILE}" ]]; then
     return 0
   fi
 
-  # plist 유효성 검증
+  # Validate plist
   if ! plutil -lint "${MAC_OPS_CONFIG_FILE}" &>/dev/null; then
-    print -- "[ERROR] config.plist 형식이 잘못되었습니다: ${MAC_OPS_CONFIG_FILE}" >&2
+    print -- "[ERROR] Invalid config.plist format: ${MAC_OPS_CONFIG_FILE}" >&2
     return 1
   fi
 
-  # 각 설정값 로드 (키가 없으면 기본값 유지)
+  # Load each configuration value (keep default if key does not exist)
   local val
 
   val=$(plutil -extract DryRun raw "${MAC_OPS_CONFIG_FILE}" 2>/dev/null)

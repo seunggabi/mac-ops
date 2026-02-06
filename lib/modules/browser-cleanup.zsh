@@ -1,44 +1,44 @@
 # =============================================================================
-# mac-ops: 브라우저 캐시 정리 모듈
-# Safari, Chrome, Firefox의 캐시 디렉토리를 휴지통 이동
+# mac-ops: Browser cache cleanup module
+# Move Safari, Chrome, Firefox cache directories to trash
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Safari 캐시 정리 내부 함수
+# Safari cache cleanup internal function
 # -----------------------------------------------------------------------------
 _mac_ops_browser_safari() {
   local safari_cache_dir="${HOME}/Library/Containers/com.apple.Safari/Data/Library/Caches"
   local cache_item="" item_basename="" item_size=0
 
-  # Safari 캐시 디렉토리 존재 확인
+  # Check if Safari cache directory exists
   if [[ ! -d "${safari_cache_dir}" ]]; then
-    mac_ops_log_debug "Safari 캐시 디렉토리가 존재하지 않습니다 (Safari 미설치 가능)"
+    mac_ops_log_debug "Safari cache directory does not exist (Safari may not be installed)"
     return 0
   fi
 
-  mac_ops_log_info "Safari 캐시 정리 시작: ${safari_cache_dir}"
+  mac_ops_log_info "Starting Safari cache cleanup: ${safari_cache_dir}"
 
-  # 안전성 체크
+  # Safety check
   if ! mac_ops_is_path_safe "${safari_cache_dir}"; then
-    mac_ops_log_error "Safari 캐시 디렉토리가 보호된 경로입니다: ${safari_cache_dir}"
+    mac_ops_log_error "Safari cache directory is a protected path: ${safari_cache_dir}"
     return 1
   fi
 
-  # 하위 항목 순회
+  # Iterate through subdirectories
   for cache_item in "${safari_cache_dir}"/*(N); do
     [[ -e "${cache_item}" ]] || continue
 
     item_basename=$(basename "${cache_item}")
 
-    # 크기 가드 체크
+    # Size guard check
     if ! mac_ops_check_size_guard "${cache_item}"; then
       item_size=$(mac_ops_get_dir_size "${cache_item}")
-      mac_ops_log_warn "크기 가드 초과로 건너뜀: Safari/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
+      mac_ops_log_warn "Skipping due to size guard exceeded: Safari/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
       continue
     fi
 
     item_size=$(mac_ops_get_dir_size "${cache_item}")
-    mac_ops_log_info "Safari 캐시 항목 정리: ${item_basename} ($(mac_ops_format_bytes ${item_size}))"
+    mac_ops_log_info "Cleaning Safari cache item: ${item_basename} ($(mac_ops_format_bytes ${item_size}))"
 
     if mac_ops_trash_move "${cache_item}" "browser-cache" "safari"; then
       MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
@@ -46,53 +46,53 @@ _mac_ops_browser_safari() {
     fi
   done
 
-  mac_ops_log_info "Safari 캐시 정리 완료"
+  mac_ops_log_info "Safari cache cleanup completed"
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# Chrome 캐시 정리 내부 함수
+# Chrome cache cleanup internal function
 # -----------------------------------------------------------------------------
 _mac_ops_browser_chrome() {
   local chrome_cache_base="${HOME}/Library/Caches/Google/Chrome/Default"
   local cache_dir="" cache_item="" item_basename="" item_size=0
 
-  # Chrome 캐시 기본 디렉토리 존재 확인
+  # Check if Chrome cache base directory exists
   if [[ ! -d "${chrome_cache_base}" ]]; then
-    mac_ops_log_debug "Chrome 캐시 디렉토리가 존재하지 않습니다 (Chrome 미설치 가능)"
+    mac_ops_log_debug "Chrome cache directory does not exist (Chrome may not be installed)"
     return 0
   fi
 
-  mac_ops_log_info "Chrome 캐시 정리 시작: ${chrome_cache_base}"
+  mac_ops_log_info "Starting Chrome cache cleanup: ${chrome_cache_base}"
 
-  # Cache와 Code Cache 디렉토리 처리
+  # Process Cache and Code Cache directories
   for cache_dir in "${chrome_cache_base}/Cache" "${chrome_cache_base}/Code Cache"; do
     if [[ ! -d "${cache_dir}" ]]; then
-      mac_ops_log_debug "Chrome 캐시 서브디렉토리 없음: ${cache_dir}"
+      mac_ops_log_debug "Chrome cache subdirectory not found: ${cache_dir}"
       continue
     fi
 
-    # 안전성 체크
+    # Safety check
     if ! mac_ops_is_path_safe "${cache_dir}"; then
-      mac_ops_log_error "Chrome 캐시 디렉토리가 보호된 경로입니다: ${cache_dir}"
+      mac_ops_log_error "Chrome cache directory is a protected path: ${cache_dir}"
       continue
     fi
 
-    # 하위 항목 순회
+    # Iterate through subdirectories
     for cache_item in "${cache_dir}"/*(N); do
       [[ -e "${cache_item}" ]] || continue
 
       item_basename=$(basename "${cache_item}")
 
-      # 크기 가드 체크
+      # Size guard check
       if ! mac_ops_check_size_guard "${cache_item}"; then
         item_size=$(mac_ops_get_dir_size "${cache_item}")
-        mac_ops_log_warn "크기 가드 초과로 건너뜀: Chrome/$(basename ${cache_dir})/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
+        mac_ops_log_warn "Skipping due to size guard exceeded: Chrome/$(basename ${cache_dir})/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
         continue
       fi
 
       item_size=$(mac_ops_get_dir_size "${cache_item}")
-      mac_ops_log_info "Chrome 캐시 항목 정리: $(basename ${cache_dir})/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
+      mac_ops_log_info "Cleaning Chrome cache item: $(basename ${cache_dir})/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
 
       if mac_ops_trash_move "${cache_item}" "browser-cache" "chrome"; then
         MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
@@ -101,55 +101,55 @@ _mac_ops_browser_chrome() {
     done
   done
 
-  mac_ops_log_info "Chrome 캐시 정리 완료"
+  mac_ops_log_info "Chrome cache cleanup completed"
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# Firefox 캐시 정리 내부 함수
+# Firefox cache cleanup internal function
 # -----------------------------------------------------------------------------
 _mac_ops_browser_firefox() {
   local firefox_cache_base="${HOME}/Library/Caches/Firefox/Profiles"
   local profile_dir="" cache_dir="" cache_item="" item_basename="" item_size=0
 
-  # Firefox 캐시 기본 디렉토리 존재 확인
+  # Check if Firefox cache base directory exists
   if [[ ! -d "${firefox_cache_base}" ]]; then
-    mac_ops_log_debug "Firefox 캐시 디렉토리가 존재하지 않습니다 (Firefox 미설치 가능)"
+    mac_ops_log_debug "Firefox cache directory does not exist (Firefox may not be installed)"
     return 0
   fi
 
-  mac_ops_log_info "Firefox 캐시 정리 시작: ${firefox_cache_base}"
+  mac_ops_log_info "Starting Firefox cache cleanup: ${firefox_cache_base}"
 
-  # 프로필 디렉토리 순회 (*.default*)
+  # Iterate through profile directories (*.default*)
   for profile_dir in "${firefox_cache_base}"/*.default*(/N); do
     cache_dir="${profile_dir}/cache2"
 
     if [[ ! -d "${cache_dir}" ]]; then
-      mac_ops_log_debug "Firefox 프로필 캐시 없음: $(basename ${profile_dir})"
+      mac_ops_log_debug "Firefox profile cache not found: $(basename ${profile_dir})"
       continue
     fi
 
-    # 안전성 체크
+    # Safety check
     if ! mac_ops_is_path_safe "${cache_dir}"; then
-      mac_ops_log_error "Firefox 캐시 디렉토리가 보호된 경로입니다: ${cache_dir}"
+      mac_ops_log_error "Firefox cache directory is a protected path: ${cache_dir}"
       continue
     fi
 
-    # 하위 항목 순회
+    # Iterate through subdirectories
     for cache_item in "${cache_dir}"/*(N); do
       [[ -e "${cache_item}" ]] || continue
 
       item_basename=$(basename "${cache_item}")
 
-      # 크기 가드 체크
+      # Size guard check
       if ! mac_ops_check_size_guard "${cache_item}"; then
         item_size=$(mac_ops_get_dir_size "${cache_item}")
-        mac_ops_log_warn "크기 가드 초과로 건너뜀: Firefox/$(basename ${profile_dir})/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
+        mac_ops_log_warn "Skipping due to size guard exceeded: Firefox/$(basename ${profile_dir})/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
         continue
       fi
 
       item_size=$(mac_ops_get_dir_size "${cache_item}")
-      mac_ops_log_info "Firefox 캐시 항목 정리: $(basename ${profile_dir})/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
+      mac_ops_log_info "Cleaning Firefox cache item: $(basename ${profile_dir})/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
 
       if mac_ops_trash_move "${cache_item}" "browser-cache" "firefox"; then
         MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
@@ -158,26 +158,26 @@ _mac_ops_browser_firefox() {
     done
   done
 
-  mac_ops_log_info "Firefox 캐시 정리 완료"
+  mac_ops_log_info "Firefox cache cleanup completed"
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# 브라우저 캐시 정리 메인 함수
-# Safari, Chrome, Firefox의 캐시를 순차적으로 정리
+# Browser cache cleanup main function
+# Clean Safari, Chrome, Firefox cache sequentially
 # -----------------------------------------------------------------------------
 mac_ops_browser_cleanup() {
-  mac_ops_log_info "브라우저 캐시 정리 시작"
+  mac_ops_log_info "Starting browser cache cleanup"
 
-  # Safari 캐시 정리
+  # Safari cache cleanup
   _mac_ops_browser_safari
 
-  # Chrome 캐시 정리
+  # Chrome cache cleanup
   _mac_ops_browser_chrome
 
-  # Firefox 캐시 정리
+  # Firefox cache cleanup
   _mac_ops_browser_firefox
 
-  mac_ops_log_info "브라우저 캐시 정리 완료"
+  mac_ops_log_info "Browser cache cleanup completed"
   return 0
 }

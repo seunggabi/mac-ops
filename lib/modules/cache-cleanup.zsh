@@ -1,15 +1,15 @@
 # =============================================================================
-# mac-ops: 캐시 정리 모듈
-# ~/Library/Caches 하위의 오래된 캐시를 디렉토리 단위로 휴지통 이동
-# com.apple.* 번들 ID 캐시는 보호
+# mac-ops: Cache cleanup module
+# Move old caches under ~/Library/Caches to trash by directory
+# Protects com.apple.* bundle ID caches
 # =============================================================================
 
-# --- 기본 설정 ---
+# --- Default settings ---
 MAC_OPS_CACHE_MAX_AGE_DAYS=${MAC_OPS_CACHE_MAX_AGE_DAYS:-7}
 
 # -----------------------------------------------------------------------------
-# 캐시 정리 메인 함수
-# 번들 디렉토리 단위로 처리하여 성능 최적화
+# Cache cleanup main function
+# Performance optimized by processing bundle directories as units
 # -----------------------------------------------------------------------------
 mac_ops_cache_cleanup() {
   local cache_dir="${HOME}/Library/Caches"
@@ -20,32 +20,35 @@ mac_ops_cache_cleanup() {
   local bundle_name="" newest_mtime="" age_seconds=0 dir_size=0 file_count=0
   local old_count=0 file_basename="" mtime="" file_size=0
 
-  mac_ops_log_info "캐시 정리 시작: ${cache_dir} (기준: ${max_age_days}일 이상)"
+  mac_ops_log_info "Cache cleanup started: ${cache_dir} (threshold: ${max_age_days} days or older)"
 
-  # 캐시 디렉토리 존재 확인
+  # Check if cache directory exists
   if [[ ! -d "${cache_dir}" ]]; then
-    mac_ops_log_warn "캐시 디렉토리가 존재하지 않습니다: ${cache_dir}"
+    mac_ops_log_warn "Cache directory does not exist: ${cache_dir}"
     return 0
   fi
 
-  # 캐시 디렉토리 안전성 체크
+  # Cache directory safety check
   if ! mac_ops_is_path_safe "${cache_dir}"; then
-    mac_ops_log_error "캐시 디렉토리가 보호된 경로입니다: ${cache_dir}"
+    mac_ops_log_error "Cache directory is a protected path: ${cache_dir}"
     return 1
   fi
 
-  # 하위 디렉토리 순회 (번들 ID 단위)
+  # Iterate subdirectories (bundle ID units)
   for bundle_dir in "${cache_dir}"/*(/N); do
     bundle_name=$(basename "${bundle_dir}")
 
-    # com.apple.* 번들 ID는 건너뜀
+    # Skip com.apple.* bundle IDs
     if [[ "${bundle_name}" == com.apple.* ]]; then
-      mac_ops_log_debug "Apple 캐시 건너뜀: ${bundle_name}"
+      mac_ops_log_debug "Apple cache skipped: ${bundle_name}"
       continue
     fi
 
-    # 번들 디렉토리 전체의 최신 수정 시간 확인 (find로 한 번에)
-    newest_mtime=$(find "${bundle_dir}" -type f -exec stat -f%m {} + 2>/dev/null | sort -rn | head -1)
+    # Check latest modification time and file count for entire bundle directory (with find at once)
+    local find_result
+    find_result=$(find "${bundle_dir}" -type f -exec stat -f%m {} + 2>/dev/null | awk 'BEGIN{max=0;n=0}{n++;if($1>max)max=$1}END{print max,n}')
+    newest_mtime="${find_result%% *}"
+    file_count="${find_result##* }"
 
     if [[ -z "${newest_mtime}" ]]; then
       continue
@@ -55,14 +58,13 @@ mac_ops_cache_cleanup() {
 
     if [[ ${age_seconds} -ge ${threshold_seconds} ]]; then
       dir_size=$(mac_ops_get_dir_size "${bundle_dir}")
-      file_count=$(find "${bundle_dir}" -type f 2>/dev/null | wc -l | tr -d ' ')
 
       if ! mac_ops_check_size_guard "${bundle_dir}"; then
-        mac_ops_log_warn "크기 가드 초과로 건너뜀: ${bundle_name} ($(mac_ops_format_bytes ${dir_size}))"
+        mac_ops_log_warn "Skipped due to size guard exceeded: ${bundle_name} ($(mac_ops_format_bytes ${dir_size}))"
         continue
       fi
 
-      mac_ops_log_info "캐시 디렉토리 정리: ${bundle_name} (${file_count}개 파일, $(mac_ops_format_bytes ${dir_size}))"
+      mac_ops_log_info "Cache directory cleanup: ${bundle_name} (${file_count} files, $(mac_ops_format_bytes ${dir_size}))"
 
       if mac_ops_trash_move "${bundle_dir}" "cache-expired" "cache-cleanup"; then
         MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + file_count))
@@ -72,18 +74,18 @@ mac_ops_cache_cleanup() {
       old_count=$(find "${bundle_dir}" -type f ! -newermt "${max_age_days} days ago" 2>/dev/null | wc -l | tr -d ' ')
 
       if [[ ${old_count} -gt 0 ]]; then
-        mac_ops_log_debug "캐시 일부 오래됨: ${bundle_name} (${old_count}개 파일이 ${max_age_days}일 초과, 최신 파일 존재하여 보류)"
+        mac_ops_log_debug "Some cache files old: ${bundle_name} (${old_count} files exceed ${max_age_days} days, deferred due to newer files existing)"
       fi
     fi
   done
 
-  # 최상위 파일도 처리 (디렉토리가 아닌 파일)
+  # Process top-level files too (non-directory files)
   for cache_file in "${cache_dir}"/*(-.N); do
     file_basename=$(basename "${cache_file}")
 
-    # com.apple.* 파일은 건너뜀
+    # Skip com.apple.* files
     if [[ "${file_basename}" == com.apple.* ]]; then
-      mac_ops_log_debug "Apple 캐시 파일 건너뜀: ${file_basename}"
+      mac_ops_log_debug "Apple cache file skipped: ${file_basename}"
       continue
     fi
 
@@ -101,6 +103,6 @@ mac_ops_cache_cleanup() {
     fi
   done
 
-  mac_ops_log_info "캐시 정리 완료"
+  mac_ops_log_info "Cache cleanup completed"
   return 0
 }

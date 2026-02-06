@@ -1,15 +1,36 @@
+[![GitHub stars](https://img.shields.io/github/stars/seunggabi/mac-ops?style=flat&color=yellow)](https://github.com/seunggabi/mac-ops/stargazers)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/seunggabi/mac-ops/releases)
+[![macOS](https://img.shields.io/badge/macOS-13%2B-black?logo=apple)](https://github.com/seunggabi/mac-ops)
+[![Open Source Love](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-red)](https://github.com/seunggabi/mac-ops)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/seunggabi/mac-ops)
+
 # mac-ops
 
-macOS 시스템 최적화 CLI 도구. 불필요한 캐시, 임시 파일, 좀비/고아 프로세스를 자동으로 정리합니다.
+> A safe, zero-dependency macOS system optimizer with a 72-hour safety net.
 
-## 핵심 특징
+macOS system optimization CLI tool. Automatically cleans up unnecessary caches, temporary files, and zombie/orphan processes.
 
-- **72시간 안전망**: 파일을 바로 삭제하지 않고 휴지통으로 이동. 실수 시 복원 가능
-- **외부 의존성 zero**: macOS 기본 도구(zsh, plutil, launchd)만 사용
-- **5계층 안전 시스템**: 화이트리스트, 블랙리스트, 크기 가드, 프로세스 보호, 락
-- **10개 정리 모듈**: 캐시, 임시파일, 로그, 좀비/고아 프로세스, Homebrew, 개발도구, Docker, 브라우저
+## Quick Start
 
-## 설치
+```bash
+git clone https://github.com/seunggabi/mac-ops.git
+cd mac-ops
+bin/mac-ops run --dry-run   # Preview what will be cleaned
+bin/mac-ops analyze          # See disk space report
+```
+
+## Key Features
+
+- **72-hour safety net**: Files are moved to trash instead of immediate deletion. Recoverable if mistakes happen
+- **Zero external dependencies**: Uses only macOS built-in tools (zsh, plutil, launchd)
+- **5-layer safety system**: Whitelist, blacklist, size guard, process protection, lock
+- **10 cleanup modules**: Cache, tmp files, logs, zombie/orphan processes, Homebrew, dev tools, Docker, browser
+- **108+ test suite**: Thoroughly tested (18 trash + 24 safety + 22 modules + 44 E2E + 6 timeout)
+
+## Installation
+
+### From Source
 
 ```bash
 git clone https://github.com/seunggabi/mac-ops.git
@@ -17,176 +38,185 @@ cd mac-ops
 chmod +x bin/mac-ops
 ```
 
-### PATH에 추가 (선택)
+### Homebrew (Coming Soon)
 
 ```bash
-# ~/.zshrc에 추가
+brew tap seunggabi/mac-ops
+brew install mac-ops
+```
+
+### Add to PATH (Optional)
+
+```bash
+# Add to ~/.zshrc
 export PATH="/path/to/mac-ops/bin:$PATH"
 ```
 
-## 사용법
+## Usage
 
-### 기본 명령어
+### Basic Commands
 
 ```bash
-# 미리보기 (dry-run) - 실제 삭제 없이 정리 대상 확인
+# Preview (dry-run) - Check cleanup targets without actual deletion
 bin/mac-ops run --dry-run
 
-# 정리 실행
+# Execute cleanup
 bin/mac-ops run
 
-# 특정 모듈만 실행
+# Run specific module only
 bin/mac-ops run --module=cache
 bin/mac-ops run --module=browser
 bin/mac-ops run --module=docker
 
-# 디스크 공간 분석 리포트
+# Disk space analysis report
 bin/mac-ops analyze
 
-# 상세 로그 출력
+# Verbose logging
 bin/mac-ops run --verbose
 ```
 
-### 사용 가능한 모듈
+### Available Modules
 
-| 모듈 | 설명 |
-|------|------|
-| `cache` | ~/Library/Caches 캐시 정리 (Apple 제외) |
-| `tmp` | /tmp, /private/var/folders, CrashReporter 정리 |
-| `log` | ~/Library/Logs, 시스템 진단 리포트 정리 |
-| `zombie` | 좀비 프로세스 탐지 및 정리 |
-| `orphan` | 고아 프로세스 탐지 및 정리 |
-| `orphan-app` | 삭제된 앱의 잔존 파일 정리 |
-| `brew` | Homebrew 캐시 정리 |
-| `dev` | Xcode, npm, yarn, pnpm, pip, Gradle 캐시 정리 |
-| `docker` | Docker dangling 이미지, 중지된 컨테이너, 미사용 볼륨 정리 |
-| `browser` | Safari, Chrome, Firefox 캐시 정리 |
+| Module | Description |
+|--------|-------------|
+| `cache` | Clean ~/Library/Caches (except Apple) |
+| `tmp` | Clean /tmp, /private/var/folders, CrashReporter |
+| `log` | Clean ~/Library/Logs, system diagnostic reports |
+| `zombie` | Detect and clean zombie processes |
+| `orphan` | Detect and clean orphan processes |
+| `orphan-app` | Clean residual files from deleted apps |
+| `brew` | Clean Homebrew caches |
+| `dev` | Clean Xcode, npm, yarn, pnpm, pip, Gradle caches |
+| `docker` | Clean Docker dangling images, stopped containers, unused volumes |
+| `browser` | Clean Safari, Chrome, Firefox caches |
 
-### 휴지통 관리
+### Trash Management
 
 ```bash
-# 휴지통 내역 조회
+# List trash contents
 bin/mac-ops list-trash
 
-# 실수로 삭제된 파일 복원
+# Restore accidentally deleted files
 bin/mac-ops restore ~/Library/Caches/com.important.app
 
-# 만료된 항목 즉시 영구 삭제
+# Immediately purge expired items
 bin/mac-ops purge
 
-# 현재 상태 확인 (휴지통, 디스크 사용량, launchd 상태)
+# Check current status (trash, disk usage, launchd status)
 bin/mac-ops status
 ```
 
-### 기타
+### Miscellaneous
 
 ```bash
-# 현재 설정 확인
+# Check current configuration
 bin/mac-ops config
 
-# 버전 확인
+# Check version
 bin/mac-ops version
 
-# 도움말
+# Show help
 bin/mac-ops help
 ```
 
-## 자동 실행 설정
+## Scheduled Execution
 
-### 방법 1: launchd (권장)
+### Method 1: launchd (Recommended)
 
-macOS 기본 스케줄러로 1시간마다 자동 실행됩니다. 절전 모드에서 깨어날 때 밀린 작업도 실행합니다.
+macOS native scheduler runs automatically every hour. Catches up on missed tasks when waking from sleep.
 
 ```bash
-# 설치
+# Install
 bin/mac-ops install
+```
 
-# 제거
+```bash
+# Uninstall
 bin/mac-ops uninstall
 ```
 
-### 방법 2: crontab
+### Method 2: crontab
 
 ```bash
 crontab -e
 ```
 
-아래 내용을 추가합니다:
+Add the following content:
 
 ```cron
-# 매시간 mac-ops 실행
+# Run mac-ops every hour
 0 * * * * /path/to/mac-ops/bin/mac-ops run --scheduled 2>&1 >> ~/.mac-ops/.logs/cron.log
 
-# 또는 매일 새벽 3시에 실행
+# Or run daily at 3 AM
 0 3 * * * /path/to/mac-ops/bin/mac-ops run --scheduled 2>&1 >> ~/.mac-ops/.logs/cron.log
 ```
 
-> `/path/to/mac-ops`는 실제 설치 경로로 변경하세요.
+> Replace `/path/to/mac-ops` with your actual installation path.
 
-## 주의사항
+## Cautions
 
-### Full Disk Access 권한 필요
+### Full Disk Access Permission Required
 
-macOS TCC 정책으로 인해 `~/Library/Caches`, `~/Library/Logs` 등 일부 경로에 접근하려면 **Full Disk Access** 권한이 필요합니다.
+Due to macOS TCC policy, **Full Disk Access** permission is required to access certain paths like `~/Library/Caches`, `~/Library/Logs`.
 
 ```
-시스템 설정 > 개인정보 보호 및 보안 > Full Disk Access
+System Settings > Privacy & Security > Full Disk Access
 ```
 
-Terminal.app (또는 iTerm, Warp 등 사용 중인 터미널)을 추가해주세요. launchd 자동 실행 시에는 `mac-ops` 바이너리 자체를 FDA 목록에 추가해야 합니다.
+Add Terminal.app (or iTerm, Warp, etc. depending on your terminal). For launchd automatic execution, add the `mac-ops` binary itself to the FDA list.
 
-### dry-run 먼저 실행할 것
+### Run dry-run First
 
-처음 사용 시 반드시 `--dry-run`으로 어떤 파일이 정리 대상인지 확인하세요.
+When using for the first time, always check what files will be cleaned with `--dry-run`.
 
 ```bash
 bin/mac-ops run --dry-run
 ```
 
-### 72시간 유예 기간
+### 72-hour Grace Period
 
-- 모든 정리 대상은 `~/.mac-ops/.trash/`로 이동되며, **72시간 후** 자동 영구 삭제됩니다
-- 72시간 이내에 `mac-ops restore <경로>`로 복원할 수 있습니다
-- `mac-ops purge`를 실행하면 만료된 항목이 즉시 영구 삭제됩니다
+- All cleanup targets are moved to `~/.mac-ops/.trash/` and automatically purged **after 72 hours**
+- You can restore with `mac-ops restore <path>` within 72 hours
+- Running `mac-ops purge` immediately purges expired items
 
-### 절대 건드리지 않는 경로
+### Paths Never Touched
 
-| 경로 | 이유 |
-|------|------|
-| `/System/*`, `/bin/*`, `/sbin/*`, `/usr/*` | SIP 보호 |
-| `~/Library/Keychains/*` | 키체인 (암호, 인증서) |
-| `~/Documents/*`, `~/Desktop/*` | 사용자 문서 |
-| `/Library/LaunchDaemons/*` | 시스템 서비스 |
+| Path | Reason |
+|------|--------|
+| `/System/*`, `/bin/*`, `/sbin/*`, `/usr/*` | SIP protected |
+| `~/Library/Keychains/*` | Keychains (passwords, certificates) |
+| `~/Documents/*`, `~/Desktop/*` | User documents |
+| `/Library/LaunchDaemons/*` | System services |
 
-### 절대 종료하지 않는 프로세스
+### Processes Never Killed
 
 ```
 kernel_task, launchd, WindowServer, loginwindow,
 SystemUIServer, Finder, cfprefsd, mds, mds_stores
 ```
 
-### Docker 모듈
+### Docker Module
 
-Docker Desktop이 실행 중일 때만 동작합니다. Docker가 설치되지 않았거나 중지 상태이면 자동으로 건너뜁니다.
+Only works when Docker Desktop is running. Automatically skipped if Docker is not installed or stopped.
 
-### 크기 가드
+### Size Guard
 
-단일 파일이 2GB를 초과하면 자동으로 건너뜁니다. `--force` 옵션으로 무시할 수 있습니다.
+Single files exceeding 2GB are automatically skipped. Can be overridden with `--force` option.
 
-## 프로젝트 구조
+## Project Structure
 
 ```
 mac-ops/
-├── bin/mac-ops                    # CLI 엔트리포인트
+├── bin/mac-ops                    # CLI entry point
 ├── lib/
-│   ├── core/                      # 핵심 유틸리티
-│   │   ├── config.zsh             # 설정 로더
-│   │   ├── trash.zsh              # 휴지통 관리
-│   │   ├── logger.zsh             # 로깅
-│   │   ├── lock.zsh               # 중복 실행 방지
-│   │   ├── safety.zsh             # 안전 시스템
-│   │   └── disk.zsh               # 디스크 모니터링
-│   ├── modules/                   # 정리 모듈
+│   ├── core/                      # Core utilities
+│   │   ├── config.zsh             # Configuration loader
+│   │   ├── trash.zsh              # Trash management
+│   │   ├── logger.zsh             # Logging
+│   │   ├── lock.zsh               # Prevent duplicate execution
+│   │   ├── safety.zsh             # Safety system
+│   │   └── disk.zsh               # Disk monitoring
+│   ├── modules/                   # Cleanup modules
 │   │   ├── cache-cleanup.zsh
 │   │   ├── tmp-cleanup.zsh
 │   │   ├── log-cleanup.zsh
@@ -198,16 +228,29 @@ mac-ops/
 │   │   ├── docker-cleanup.zsh
 │   │   ├── browser-cleanup.zsh
 │   │   └── analyze.zsh
-│   └── utils/                     # 공유 유틸리티
+│   └── utils/                     # Shared utilities
 │       ├── format.zsh
 │       ├── notify.zsh
 │       ├── parallel.zsh
 │       └── plist-helper.zsh
-├── config/                        # 설정 파일
-├── launchd/                       # launchd 에이전트
-└── tests/                         # 테스트 (64개)
+├── config/                        # Configuration files
+├── launchd/                       # launchd agents
+├── scripts/                       # Utility scripts
+├── demo/                          # Demo and example files
+├── Formula/                       # Homebrew formula
+├── .github/                       # GitHub workflows and templates
+└── tests/                         # Test suites
+    ├── test-trash.zsh             # 18 trash system tests
+    ├── test-safety.zsh            # 24 safety protection tests
+    ├── test-modules.zsh           # 22 module tests
+    ├── e2e/                       # 44 end-to-end tests
+    └── timeout/                   # 6 timeout handling tests
 ```
 
-## 라이선스
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to submit issues, feature requests, and pull requests.
+
+## License
 
 MIT
