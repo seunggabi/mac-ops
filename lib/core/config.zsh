@@ -40,10 +40,8 @@ mac_ops_init_dirs() {
       fi
     fi
 
-    # Set log directory to be accessible only by owner
-    if [[ "${dir}" == "${MAC_OPS_LOG_DIR}" ]]; then
-      chmod 700 "${dir}" 2>/dev/null
-    fi
+    # Set directories to be accessible only by owner
+    chmod 700 "${dir}" 2>/dev/null
   done
 
   return 0
