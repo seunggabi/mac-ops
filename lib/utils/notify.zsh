@@ -56,6 +56,7 @@ mac_ops_notify_completion() {
   fi
 
   # Join message parts
+  # shellcheck disable=SC2296
   message="${(j:, :)message_parts}"
 
   # Send notification

@@ -8,6 +8,7 @@ MAC_OPS_LOG_FILE="${MAC_OPS_LOG_DIR}/mac-ops.log"
 
 # Log level constants
 typeset -A MAC_OPS_LOG_LEVELS
+# shellcheck disable=SC2190
 MAC_OPS_LOG_LEVELS=(
   DEBUG 0
   INFO  1

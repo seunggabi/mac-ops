@@ -76,6 +76,7 @@ _mac_ops_collect_installed_bundles() {
   for app_base in "${app_dirs[@]}"; do
     [[ ! -d "${app_base}" ]] && continue
 
+    # shellcheck disable=SC1073,SC1036,SC1058,SC1072
     for app_path in "${app_base}"/*.app(N); do
       [[ ! -d "${app_path}" ]] && continue
 

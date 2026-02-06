@@ -36,6 +36,7 @@ _mac_ops_json_escape() {
 # -----------------------------------------------------------------------------
 _mac_ops_json_extract_string() {
   local line="${1}"
+  # shellcheck disable=SC2076
   if [[ "${line}" =~ ':[[:space:]]*"(.*)"' ]]; then
     local val="${match[1]}"
     # Unescape
@@ -50,6 +51,7 @@ _mac_ops_json_extract_string() {
 # -----------------------------------------------------------------------------
 _mac_ops_json_extract_number() {
   local line="${1}"
+  # shellcheck disable=SC2076
   if [[ "${line}" =~ ':[[:space:]]*([0-9]+)' ]]; then
     print -- "${match[1]}"
   fi
@@ -132,7 +134,7 @@ mac_ops_index_read() {
         '"expire_after":'*)
           _MAC_OPS_IDX_EXPIRE[${current_key}]="$(_mac_ops_json_extract_string "${trimmed}")"
           ;;
-        '}'*|'},')
+        '}'*) # matches both '}' and '},'
           current_key=""
           ;;
       esac
@@ -274,6 +276,7 @@ _mac_ops_migrate_plist_to_index() {
   [[ ! -d "${MAC_OPS_META_DIR}" ]] && return 0
 
   local plist_files
+  # shellcheck disable=SC1036
   plist_files=("${MAC_OPS_META_DIR}"/*.plist(N))
   [[ ${#plist_files} -eq 0 ]] && return 0
 
@@ -322,7 +325,7 @@ _mac_ops_migrate_plist_to_index() {
           '"expire_after":'*)
             _MAC_OPS_IDX_EXPIRE[${current_key}]="$(_mac_ops_json_extract_string "${trimmed}")"
             ;;
-          '}'*|'},')
+          '}'*) # matches both '}' and '},'
             current_key=""
             ;;
         esac

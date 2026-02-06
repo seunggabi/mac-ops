@@ -180,6 +180,7 @@ _mac_ops_cmd_run() {
       mac_ops_log_warn "Some modules timed out or failed during parallel execution"
 
     # Sum up from statistics files
+    # shellcheck disable=SC1073,SC1036,SC1058,SC1072
     for stats_file in "${stats_dir}"/*.stats(N); do
       [[ ! -f "${stats_file}" ]] && continue
       mod_count=0; mod_bytes=0
