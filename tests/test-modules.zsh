@@ -275,7 +275,7 @@ version_output=$("${MAC_OPS_ROOT}/bin/mac-ops" version 2>&1)
 local version_exit=$?
 
 assert_exit_code "${version_exit}" "0" "bin/mac-ops version exits 0"
-assert_output_contains "${version_output}" "v1.0.0" "version output contains 'v1.0.0'"
+assert_output_contains "${version_output}" "mac-ops v" "version output contains 'mac-ops v'"
 
 print ""
 

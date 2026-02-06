@@ -76,7 +76,7 @@ mac_ops_brew_cleanup() {
 
   # Estimate cleaned file count (try to extract from brew cleanup output)
   local cleaned_count
-  cleaned_count=$(echo "${cleanup_output}" | grep -c "Removing:" || echo 0)
+  cleaned_count=$(echo "${cleanup_output}" | grep -c "Removing:" || true)
   MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + cleaned_count))
 
   local freed_mb=$((freed_bytes / 1048576))
