@@ -1,18 +1,19 @@
 class MacOps < Formula
   desc "macOS system optimization CLI tool"
   homepage "https://github.com/seunggabi/mac-ops"
-  url "https://github.com/seunggabi/mac-ops/archive/refs/tags/v1.0.0.tar.gz"
-  # sha256 will be filled after release
+  url "https://github.com/seunggabi/mac-ops/archive/refs/tags/v1.1.0.tar.gz"
+  sha256 "bc55b34bd17326e301d50f7966530602922d5ec7398e4c7d39e304e0b54440ff"
   license "MIT"
 
   depends_on :macos
 
   def install
-    # Install all files preserving directory structure
-    prefix.install "bin", "lib", "config", "launchd"
-
-    # Create symlink for the main executable
-    bin.install_symlink prefix/"bin/mac-ops"
+    libexec.install Dir["*"]
+    (bin/"mac-ops").write <<~EOS
+      #!/bin/zsh
+      exec "#{libexec}/bin/mac-ops" "$@"
+    EOS
+    chmod 0755, bin/"mac-ops"
   end
 
   def caveats
