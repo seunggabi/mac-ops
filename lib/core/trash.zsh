@@ -325,7 +325,7 @@ _mac_ops_migrate_plist_to_index() {
           '"expire_after":'*)
             _MAC_OPS_IDX_EXPIRE[${current_key}]="$(_mac_ops_json_extract_string "${trimmed}")"
             ;;
-          '}'*|'},')
+          '}'*) # matches both '}' and '},'
             current_key=""
             ;;
         esac

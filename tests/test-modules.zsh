@@ -217,7 +217,7 @@ print "[TEST] test_analyze"
 local analyze_output
 analyze_output=$(mac_ops_analyze 2>/dev/null)
 assert_exit_code "$?" "0" "analyze completes without error"
-assert_output_contains "${analyze_output}" "총 절약 가능 공간" "analyze output contains total summary"
+assert_output_contains "${analyze_output}" "Total Reclaimable Space" "analyze output contains total summary"
 
 print ""
 
@@ -247,7 +247,7 @@ cli_analyze_output=$("${MAC_OPS_ROOT}/bin/mac-ops" analyze 2>&1)
 local cli_analyze_exit=$?
 
 assert_exit_code "${cli_analyze_exit}" "0" "bin/mac-ops analyze exits 0"
-assert_output_contains "${cli_analyze_output}" "총 절약 가능 공간" "analyze CLI output contains total summary"
+assert_output_contains "${cli_analyze_output}" "Total Reclaimable Space" "analyze CLI output contains total summary"
 
 print ""
 
