@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<string>kernel_task</string>
+	<string>launchd</string>
+	<string>WindowServer</string>
+	<string>loginwindow</string>
+	<string>SystemUIServer</string>
+	<string>Finder</string>
+	<string>cfprefsd</string>
+	<string>mds</string>
+	<string>mds_stores</string>
+	<string>Dock</string>
+	<string>coreaudiod</string>
+	<string>opendirectoryd</string>
+	<string>diskarbitrationd</string>
+	<string>configd</string>
+	<string>UserEventAgent</string>
+	<string>trustd</string>
+	<string>securityd</string>
+	<string>syslogd</string>
+	<string>notifyd</string>
+	<string>logd</string>
+	<string>powerd</string>
+</array>
+</plist>

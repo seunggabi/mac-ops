@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.mac-ops.cleanup</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>REPLACEME_MAC_OPS_BIN</string>
+		<string>run</string>
+		<string>--scheduled</string>
+	</array>
+	<key>StartInterval</key>
+	<integer>3600</integer>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>REPLACEME_MAC_OPS_HOME/.logs/launchd-stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>REPLACEME_MAC_OPS_HOME/.logs/launchd-stderr.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+	</dict>
+</dict>
+</plist>

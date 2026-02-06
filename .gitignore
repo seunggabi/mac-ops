@@ -1,0 +1,4 @@
+# mac-ops .gitignore
+.omc/
+.claude/logs/
+*.DS_Store
