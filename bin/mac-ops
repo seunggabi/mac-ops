@@ -36,8 +36,9 @@ source "${MAC_OPS_ROOT}/lib/modules/docker-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/browser-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/analyze.zsh"
 
-# --- Version ---
-MAC_OPS_VERSION="1.0.0"
+# --- Version (from git tag, fallback to unknown) ---
+MAC_OPS_VERSION=$(git -C "${MAC_OPS_ROOT}" describe --tags --abbrev=0 2>/dev/null || echo "unknown")
+MAC_OPS_VERSION="${MAC_OPS_VERSION#v}"
 
 # --- Module name -> function name mapping ---
 typeset -A MAC_OPS_MODULE_MAP

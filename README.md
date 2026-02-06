@@ -1,6 +1,6 @@
 [![GitHub stars](https://img.shields.io/github/stars/seunggabi/mac-ops?style=flat&color=yellow)](https://github.com/seunggabi/mac-ops/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/seunggabi/mac-ops/releases)
+[![Version](https://img.shields.io/github/v/release/seunggabi/mac-ops?color=blue)](https://github.com/seunggabi/mac-ops/releases)
 [![macOS](https://img.shields.io/badge/macOS-13%2B-black?logo=apple)](https://github.com/seunggabi/mac-ops)
 [![Open Source Love](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-red)](https://github.com/seunggabi/mac-ops)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/seunggabi/mac-ops)
@@ -250,6 +250,10 @@ mac-ops/
 ## Contributing
 
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to submit issues, feature requests, and pull requests.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=seunggabi/mac-ops&type=Date)](https://star-history.com/#seunggabi/mac-ops&Date)
 
 ## License
 
