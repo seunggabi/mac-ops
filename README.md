@@ -1,6 +1,6 @@
 [![GitHub stars](https://img.shields.io/github/stars/seunggabi/mac-ops?style=flat&color=yellow)](https://github.com/seunggabi/mac-ops/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/seunggabi/mac-ops/releases)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/seunggabi/mac-ops/releases)
 [![macOS](https://img.shields.io/badge/macOS-13%2B-black?logo=apple)](https://github.com/seunggabi/mac-ops)
 [![Open Source Love](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-red)](https://github.com/seunggabi/mac-ops)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/seunggabi/mac-ops)
@@ -38,7 +38,7 @@ cd mac-ops
 chmod +x bin/mac-ops
 ```
 
-### Homebrew (Coming Soon)
+### Homebrew
 
 ```bash
 brew tap seunggabi/mac-ops
@@ -232,7 +232,8 @@ mac-ops/
 │       ├── format.zsh
 │       ├── notify.zsh
 │       ├── parallel.zsh
-│       └── plist-helper.zsh
+│       ├── plist-helper.zsh
+│       └── snapshot.zsh
 ├── config/                        # Configuration files
 ├── launchd/                       # launchd agents
 ├── scripts/                       # Utility scripts
