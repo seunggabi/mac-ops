@@ -20,7 +20,8 @@ mac_ops_parallel_wait_with_timeout() {
   # Record start time for each PID
   typeset -A start_times
   typeset -A completed
-  local current_time=$(date +%s)
+  local current_time
+  current_time=$(date +%s)
   for pid in "${pids[@]}"; do
     start_times[$pid]=$current_time
     completed[$pid]=0

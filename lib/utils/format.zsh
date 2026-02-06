@@ -15,10 +15,13 @@ mac_ops_format_bytes() {
   if (( bytes < 1024 )); then
     echo "${bytes} B"
   elif (( bytes < 1048576 )); then
+    # shellcheck disable=SC2079
     printf "%.1f KB\n" $(( bytes / 1024.0 ))
   elif (( bytes < 1073741824 )); then
+    # shellcheck disable=SC2079
     printf "%.1f MB\n" $(( bytes / 1048576.0 ))
   else
+    # shellcheck disable=SC2079
     printf "%.1f GB\n" $(( bytes / 1073741824.0 ))
   fi
 }
