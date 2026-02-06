@@ -1,11 +1,11 @@
 #!/bin/zsh
 # =============================================================================
-# mac-ops: 휴지통 시스템 테스트
+# mac-ops: Trash system tests (JSON index)
 # =============================================================================
 setopt NO_ERR_EXIT NO_PIPE_FAIL
 setopt NULL_GLOB
 
-# --- 테스트 프레임워크 ---
+# --- Test framework ---
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_TOTAL=0
@@ -65,10 +65,10 @@ assert_output_contains() {
     fi
 }
 
-# --- 프로젝트 루트 ---
+# --- Project root ---
 MAC_OPS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# --- 테스트 환경 설정 ---
+# --- Test environment setup ---
 TEST_TMPDIR=$(mktemp -d)
 export MAC_OPS_HOME="${TEST_TMPDIR}/mac-ops-home"
 export MAC_OPS_TRASH_DIR="${MAC_OPS_HOME}/.trash"
@@ -82,7 +82,7 @@ export MAC_OPS_FORCE=false
 export MAC_OPS_SCHEDULED=true
 export MAC_OPS_TRASH_RETENTION_HOURS=72
 
-# --- 모듈 로딩 ---
+# --- Module loading ---
 source "${MAC_OPS_ROOT}/lib/core/config.zsh"
 source "${MAC_OPS_ROOT}/lib/core/logger.zsh"
 source "${MAC_OPS_ROOT}/lib/core/lock.zsh"
@@ -92,14 +92,17 @@ source "${MAC_OPS_ROOT}/lib/core/disk.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/plist-helper.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/format.zsh"
 
-# 디렉토리 초기화
+# Directory initialization
 mac_ops_init_dirs
 
-# 테스트용 파일 경로 (TEST_TMPDIR 내에 생성하여 같은 볼륨 보장)
+# Test file paths (created inside TEST_TMPDIR to guarantee same volume)
 TEST_FILES_DIR="${TEST_TMPDIR}/test-files"
 mkdir -p "${TEST_FILES_DIR}"
 
-print "=== mac-ops 휴지통 시스템 테스트 ==="
+# Index file path for test assertions
+INDEX_FILE="${MAC_OPS_TRASH_DIR}/.index.json"
+
+print "=== mac-ops Trash System Tests ==="
 print ""
 
 # =============================================================================
@@ -107,7 +110,7 @@ print ""
 # =============================================================================
 print "[TEST] test_trash_move"
 
-# 테스트 파일 생성
+# Create test file
 echo "test content for trash move" > "${TEST_FILES_DIR}/file1.txt"
 
 mac_ops_trash_move "${TEST_FILES_DIR}/file1.txt" "test-reason" "test-module" 2>/dev/null
@@ -116,27 +119,31 @@ local move_exit=$?
 assert_exit_code "${move_exit}" "0" "trash_move returns 0"
 assert_file_not_exists "${TEST_FILES_DIR}/file1.txt" "original file removed after trash_move"
 
-# trash 디렉토리에 파일이 존재하는지 확인
+# Verify file exists in trash directory
 local trash_target="${MAC_OPS_TRASH_DIR}${TEST_FILES_DIR}/file1.txt"
 assert_file_exists "${trash_target}" "file exists in trash directory"
 
-# metadata plist가 생성되었는지 확인
-local meta_count
-meta_count=$(ls "${MAC_OPS_META_DIR}"/*.plist 2>/dev/null | wc -l | tr -d ' ')
-assert_eq "$((meta_count > 0))" "1" "metadata plist file created"
+# Verify JSON index file was created
+assert_file_exists "${INDEX_FILE}" "JSON index file created"
 
-# metadata의 OriginalPath, Status 값 확인
-if [[ ${meta_count} -gt 0 ]]; then
-    local meta_file
-    meta_file=$(ls "${MAC_OPS_META_DIR}"/*.plist 2>/dev/null | head -1)
+# Verify the index contains the correct original_path
+mac_ops_index_read
+local found_file1=false
+local file1_key=""
+local k
+for k in "${_MAC_OPS_IDX_KEYS[@]}"; do
+    if [[ "${_MAC_OPS_IDX_ORIG[${k}]}" == "${TEST_FILES_DIR}/file1.txt" ]]; then
+        found_file1=true
+        file1_key="${k}"
+        break
+    fi
+done
+assert_eq "${found_file1}" "true" "index contains OriginalPath for file1"
 
-    local orig_path
-    orig_path=$(plutil -extract OriginalPath raw "${meta_file}" 2>/dev/null)
-    assert_eq "${orig_path}" "${TEST_FILES_DIR}/file1.txt" "metadata OriginalPath is correct"
-
-    local status_val
-    status_val=$(plutil -extract Status raw "${meta_file}" 2>/dev/null)
-    assert_eq "${status_val}" "completed" "metadata Status is completed"
+# Verify index entry fields
+if [[ -n "${file1_key}" ]]; then
+    assert_eq "${_MAC_OPS_IDX_REASON[${file1_key}]}" "test-reason" "index reason is correct"
+    assert_eq "${_MAC_OPS_IDX_MODULE[${file1_key}]}" "test-module" "index module is correct"
 fi
 
 print ""
@@ -146,27 +153,33 @@ print ""
 # =============================================================================
 print "[TEST] test_trash_restore"
 
-# 새 파일 생성 및 trash 이동
+# Create new file and move to trash
 echo "test content for restore" > "${TEST_FILES_DIR}/file2.txt"
 local file2_abs="${TEST_FILES_DIR}/file2.txt"
 mac_ops_trash_move "${file2_abs}" "test-restore" "test-module" 2>/dev/null
 
-# 원래 파일이 사라졌는지 확인
+# Verify original file is removed
 assert_file_not_exists "${file2_abs}" "file removed before restore"
 
-# 복원
+# Restore
 mac_ops_trash_restore "${file2_abs}" 2>/dev/null
 local restore_exit=$?
 
 assert_exit_code "${restore_exit}" "0" "trash_restore returns 0"
 assert_file_exists "${file2_abs}" "file restored to original location"
 
-# metadata가 삭제되었는지 확인 (file2의 hash에 해당하는 meta만)
+# Verify metadata was removed from index (no entry with file2 path hash)
 local file2_hash
 file2_hash=$(print -n "${file2_abs}" | shasum -a 256 | cut -d' ' -f1)
-local file2_meta_count
-file2_meta_count=$(find "${MAC_OPS_META_DIR}" -name "${file2_hash}_*.plist" 2>/dev/null | wc -l | tr -d ' ')
-assert_eq "${file2_meta_count}" "0" "metadata removed after restore"
+mac_ops_index_read
+local file2_found=false
+for k in "${_MAC_OPS_IDX_KEYS[@]}"; do
+    if [[ "${k}" == "${file2_hash}_"* ]]; then
+        file2_found=true
+        break
+    fi
+done
+assert_eq "${file2_found}" "false" "index entry removed after restore"
 
 print ""
 
@@ -175,36 +188,45 @@ print ""
 # =============================================================================
 print "[TEST] test_trash_expire"
 
-# 새 파일 생성 및 trash 이동
+# Create new file and move to trash
 echo "test content for expire" > "${TEST_FILES_DIR}/file3.txt"
 local file3_abs="${TEST_FILES_DIR}/file3.txt"
 mac_ops_trash_move "${file3_abs}" "test-expire" "test-module" 2>/dev/null
 
-# metadata의 ExpiresAt을 과거 시간으로 수정
+# Modify expire_after to a past time directly in the JSON index
 local file3_hash
 file3_hash=$(print -n "${file3_abs}" | shasum -a 256 | cut -d' ' -f1)
-local file3_meta
-file3_meta=$(find "${MAC_OPS_META_DIR}" -name "${file3_hash}_*.plist" 2>/dev/null | head -1)
 
-if [[ -n "${file3_meta}" ]]; then
-    # 과거 시간으로 설정 (2020-01-01)
-    plutil -replace ExpiresAt -string "2020-01-01T00:00:00Z" "${file3_meta}" 2>/dev/null
-fi
+# Read index, find the key, change expire, write back
+mac_ops_index_read
+for k in "${_MAC_OPS_IDX_KEYS[@]}"; do
+    if [[ "${k}" == "${file3_hash}_"* ]]; then
+        _MAC_OPS_IDX_EXPIRE[${k}]="2020-01-01T00:00:00Z"
+        break
+    fi
+done
+mac_ops_index_write
 
-# trash 파일의 경로 확인
+# Verify trash file path
 local file3_trash="${MAC_OPS_TRASH_DIR}${file3_abs}"
 
-# expire 실행
+# Execute expire
 mac_ops_trash_expire 2>/dev/null
 local expire_exit=$?
 
 assert_exit_code "${expire_exit}" "0" "trash_expire returns 0"
 assert_file_not_exists "${file3_trash}" "expired file permanently deleted from trash"
 
-# metadata도 삭제되었는지
-local file3_meta_after
-file3_meta_after=$(find "${MAC_OPS_META_DIR}" -name "${file3_hash}_*.plist" 2>/dev/null | wc -l | tr -d ' ')
-assert_eq "${file3_meta_after}" "0" "metadata removed after expire"
+# Verify metadata was removed from index
+mac_ops_index_read
+local file3_found=false
+for k in "${_MAC_OPS_IDX_KEYS[@]}"; do
+    if [[ "${k}" == "${file3_hash}_"* ]]; then
+        file3_found=true
+        break
+    fi
+done
+assert_eq "${file3_found}" "false" "index entry removed after expire"
 
 print ""
 
@@ -213,7 +235,7 @@ print ""
 # =============================================================================
 print "[TEST] test_trash_list"
 
-# 여러 파일을 trash에 넣기
+# Move multiple files to trash
 echo "list test 1" > "${TEST_FILES_DIR}/list1.txt"
 echo "list test 2" > "${TEST_FILES_DIR}/list2.txt"
 mac_ops_trash_move "${TEST_FILES_DIR}/list1.txt" "list-test" "test-module" 2>/dev/null
@@ -226,6 +248,21 @@ local list_exit=$?
 assert_exit_code "${list_exit}" "0" "trash_list returns 0"
 assert_output_contains "${list_output}" "list1.txt" "trash_list output contains list1.txt"
 assert_output_contains "${list_output}" "list2.txt" "trash_list output contains list2.txt"
+
+print ""
+
+# =============================================================================
+# test_trash_status
+# =============================================================================
+print "[TEST] test_trash_status"
+
+local status_output
+status_output=$(mac_ops_trash_status 2>/dev/null)
+local status_exit=$?
+
+assert_exit_code "${status_exit}" "0" "trash_status returns 0"
+assert_output_contains "${status_output}" "Total items:" "status output contains Total items"
+assert_output_contains "${status_output}" "Total size:" "status output contains Total size"
 
 print ""
 
@@ -248,13 +285,62 @@ MAC_OPS_DRY_RUN=false
 print ""
 
 # =============================================================================
-# 테스트 정리
+# test_plist_migration
+# =============================================================================
+print "[TEST] test_plist_migration"
+
+# Create a legacy plist metadata file to test migration
+local migrate_hash="abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+local migrate_plist="${MAC_OPS_META_DIR}/${migrate_hash}_20250101120000.plist"
+mkdir -p "${MAC_OPS_META_DIR}"
+
+# Create a fake trash file for the migration test
+local migrate_trash_path="${MAC_OPS_TRASH_DIR}/migrate-test.txt"
+echo "migrated content" > "${migrate_trash_path}"
+
+plutil -create xml1 "${migrate_plist}" 2>/dev/null
+plutil -insert OriginalPath -string "/tmp/migrate-test.txt" "${migrate_plist}" 2>/dev/null
+plutil -insert TrashPath -string "${migrate_trash_path}" "${migrate_plist}" 2>/dev/null
+plutil -insert MovedAt -string "2025-01-01T12:00:00Z" "${migrate_plist}" 2>/dev/null
+plutil -insert ExpiresAt -string "2025-01-04T12:00:00Z" "${migrate_plist}" 2>/dev/null
+plutil -insert SizeBytes -integer 100 "${migrate_plist}" 2>/dev/null
+plutil -insert Reason -string "migration-test" "${migrate_plist}" 2>/dev/null
+plutil -insert Module -string "test-module" "${migrate_plist}" 2>/dev/null
+plutil -insert Status -string "completed" "${migrate_plist}" 2>/dev/null
+
+# Trigger migration by reading the index
+mac_ops_index_read
+
+# Verify the plist file was removed
+assert_file_not_exists "${migrate_plist}" "legacy plist removed after migration"
+
+# Verify the entry exists in the JSON index
+local migrate_key="${migrate_hash}_20250101120000"
+local migrate_found=false
+for k in "${_MAC_OPS_IDX_KEYS[@]}"; do
+    if [[ "${k}" == "${migrate_key}" ]]; then
+        migrate_found=true
+        break
+    fi
+done
+assert_eq "${migrate_found}" "true" "migrated entry found in JSON index"
+
+# Verify migrated field values
+if [[ "${migrate_found}" == "true" ]]; then
+    assert_eq "${_MAC_OPS_IDX_ORIG[${migrate_key}]}" "/tmp/migrate-test.txt" "migrated original_path is correct"
+    assert_eq "${_MAC_OPS_IDX_REASON[${migrate_key}]}" "migration-test" "migrated reason is correct"
+fi
+
+print ""
+
+# =============================================================================
+# Test cleanup
 # =============================================================================
 rm -rf "${TEST_TMPDIR}"
 
-# --- 결과 요약 ---
+# --- Results summary ---
 print "========================================="
-print "테스트 결과: ${TESTS_PASSED}/${TESTS_TOTAL} passed, ${TESTS_FAILED} failed"
+print "Test results: ${TESTS_PASSED}/${TESTS_TOTAL} passed, ${TESTS_FAILED} failed"
 print "========================================="
 
 if [[ ${TESTS_FAILED} -gt 0 ]]; then

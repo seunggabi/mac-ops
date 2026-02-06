@@ -1,9 +1,88 @@
 # lib/utils/parallel.zsh
-# 병렬 실행 유틸리티
+# Parallel execution utilities
 
-# 여러 함수를 병렬로 실행
-# 인자: 함수명 배열 (공백으로 구분)
-# 반환: 실패한 함수 목록을 stdout에 출력, 성공 시 0 반환
+# Default timeout for parallel module execution (in seconds)
+: ${MAC_OPS_PARALLEL_TIMEOUT_SECONDS:=300}
+
+# Wait for PIDs with timeout monitoring
+# Args: timeout_seconds pid1 pid2 ...
+# Returns: 0 if all processes completed, 1 if any timed out or failed
+mac_ops_parallel_wait_with_timeout() {
+  local timeout="$1"
+  shift
+  local -a pids=("$@")
+
+  if [[ ${#pids[@]} -eq 0 ]]; then
+    echo "No PIDs specified to wait for" >&2
+    return 1
+  fi
+
+  # Record start time for each PID
+  typeset -A start_times
+  typeset -A completed
+  local current_time=$(date +%s)
+  for pid in "${pids[@]}"; do
+    start_times[$pid]=$current_time
+    completed[$pid]=0
+  done
+
+  local -a remaining_pids=("${pids[@]}")
+  local check_interval=1
+  local has_timeout=0
+  local has_failure=0
+
+  # Monitor all PIDs until completion or timeout
+  while [[ ${#remaining_pids[@]} -gt 0 ]]; do
+    local -a still_running=()
+    current_time=$(date +%s)
+
+    for pid in "${remaining_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        # Process still running, check timeout
+        local elapsed=$((current_time - start_times[$pid]))
+        if [[ $elapsed -ge $timeout ]]; then
+          echo "Process $pid exceeded timeout (${timeout}s), terminating..." >&2
+          # Try graceful termination first
+          kill -TERM "$pid" 2>/dev/null
+          sleep 1
+          # Force kill if still alive
+          if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL "$pid" 2>/dev/null
+            sleep 0.5
+          fi
+          # Reap the killed process
+          wait "$pid" 2>/dev/null || true
+          has_timeout=1
+          # Don't add to still_running - it's done
+        else
+          # Still running and within timeout
+          still_running+=("$pid")
+        fi
+      else
+        # Process completed, reap it
+        wait "$pid" 2>/dev/null
+        local exit_code=$?
+        if [[ $exit_code -ne 0 ]]; then
+          has_failure=1
+        fi
+        # Don't add to still_running - it's done
+      fi
+    done
+
+    remaining_pids=("${still_running[@]}")
+
+    if [[ ${#remaining_pids[@]} -gt 0 ]]; then
+      sleep $check_interval
+    fi
+  done
+
+  [[ $has_timeout -eq 1 || $has_failure -eq 1 ]] && return 1
+  return 0
+}
+
+# Execute multiple functions in parallel
+# Args: function name array (space-separated)
+# Returns: Outputs failed function list to stdout, returns 0 on success
 mac_ops_parallel_run() {
   local -a functions=("$@")
   local -a pids=()
@@ -11,20 +90,20 @@ mac_ops_parallel_run() {
   local -a failed=()
 
   if [[ ${#functions[@]} -eq 0 ]]; then
-    echo "실행할 함수가 지정되지 않았습니다" >&2
+    echo "No functions specified to execute" >&2
     return 1
   fi
 
-  # 각 함수를 백그라운드로 실행
+  # Execute each function in background
   for func in "${functions[@]}"; do
-    # 함수 존재 여부 확인
+    # Check if function exists
     if ! typeset -f "$func" &>/dev/null; then
-      echo "함수가 존재하지 않습니다: $func" >&2
+      echo "Function does not exist: $func" >&2
       failed+=("$func")
       continue
     fi
 
-    # 백그라운드 실행
+    # Execute in background
     (
       $func
       exit $?
@@ -33,14 +112,14 @@ mac_ops_parallel_run() {
     pids+=($!)
   done
 
-  # 모든 프로세스 완료 대기 및 결과 수집
+  # Wait for all processes to complete and collect results
   local idx=0
   for pid in "${pids[@]}"; do
     wait $pid
     local exit_code=$?
     results+=($exit_code)
 
-    # 실패한 함수 기록
+    # Record failed functions
     if [[ $exit_code -ne 0 ]]; then
       failed+=("${functions[$idx]}")
     fi
@@ -48,7 +127,7 @@ mac_ops_parallel_run() {
     ((idx++))
   done
 
-  # 실패한 함수가 있으면 출력
+  # Output failed functions if any
   if [[ ${#failed[@]} -gt 0 ]]; then
     echo "${failed[@]}"
     return 1
@@ -57,24 +136,24 @@ mac_ops_parallel_run() {
   return 0
 }
 
-# PID 배열에 대해 완료 대기 및 결과 수집
-# 인자: pid 배열
-# 반환: exit code 배열을 stdout에 출력 (공백으로 구분), 하나라도 실패하면 1 반환
+# Wait for completion of PID array and collect results
+# Args: pid array
+# Returns: Outputs exit code array to stdout (space-separated), returns 1 if any failed
 mac_ops_parallel_wait() {
   local -a pids=("$@")
   local -a results=()
   local has_failure=0
 
   if [[ ${#pids[@]} -eq 0 ]]; then
-    echo "대기할 PID가 지정되지 않았습니다" >&2
+    echo "No PIDs specified to wait for" >&2
     return 1
   fi
 
-  # 각 PID 완료 대기
+  # Wait for each PID to complete
   for pid in "${pids[@]}"; do
-    # PID 유효성 검사
+    # Validate PID
     if ! kill -0 "$pid" 2>/dev/null; then
-      # 이미 종료된 프로세스
+      # Already terminated process
       results+=(255)
       has_failure=1
       continue
@@ -89,7 +168,7 @@ mac_ops_parallel_wait() {
     fi
   done
 
-  # 결과 배열 출력
+  # Output result array
   echo "${results[@]}"
 
   return $has_failure

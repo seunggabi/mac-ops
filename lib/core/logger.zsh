@@ -1,12 +1,12 @@
 # =============================================================================
-# mac-ops: 로깅 시스템
-# 파일 + stdout 동시 출력, 로그 레벨 지원, 로테이션
+# mac-ops: Logging system
+# Simultaneous file + stdout output, log level support, rotation
 # =============================================================================
 
-# 로그 파일 경로
+# Log file path
 MAC_OPS_LOG_FILE="${MAC_OPS_LOG_DIR}/mac-ops.log"
 
-# 로그 레벨 상수
+# Log level constants
 typeset -A MAC_OPS_LOG_LEVELS
 MAC_OPS_LOG_LEVELS=(
   DEBUG 0
@@ -15,24 +15,24 @@ MAC_OPS_LOG_LEVELS=(
   ERROR 3
 )
 
-# 로그 로테이션 설정
+# Log rotation settings
 MAC_OPS_LOG_MAX_SIZE=5242880   # 5MB
-MAC_OPS_LOG_MAX_FILES=7        # 최대 7개 보관
+MAC_OPS_LOG_MAX_FILES=7        # Keep maximum 7 files
 
 # -----------------------------------------------------------------------------
-# 핵심 로그 함수
-# 사용법: mac_ops_log <LEVEL> <메시지>
+# Core log function
+# Usage: mac_ops_log <LEVEL> <message>
 # -----------------------------------------------------------------------------
 mac_ops_log() {
   local level="${1}"
   local message="${2}"
 
-  # 레벨 유효성 검증
+  # Validate level
   if [[ -z "${MAC_OPS_LOG_LEVELS[${level}]+_}" ]]; then
     level="INFO"
   fi
 
-  # DEBUG 레벨은 VERBOSE 모드에서만 출력
+  # DEBUG level only outputs in VERBOSE mode
   if [[ "${level}" == "DEBUG" && "${MAC_OPS_VERBOSE}" != "true" ]]; then
     return 0
   fi
@@ -41,12 +41,17 @@ mac_ops_log() {
   timestamp=$(date '+%Y-%m-%d %H:%M:%S')
   local formatted="[${timestamp}] [${level}] ${message}"
 
-  # 파일 출력 (로그 디렉토리가 존재하면)
+  # File output (if log directory exists)
   if [[ -d "${MAC_OPS_LOG_DIR}" ]]; then
+    # If log file is newly created, set to be readable/writable only by owner
+    if [[ ! -f "${MAC_OPS_LOG_FILE}" ]]; then
+      touch "${MAC_OPS_LOG_FILE}" 2>/dev/null
+      chmod 600 "${MAC_OPS_LOG_FILE}" 2>/dev/null
+    fi
     print -- "${formatted}" >> "${MAC_OPS_LOG_FILE}" 2>/dev/null
   fi
 
-  # stdout 출력 (SCHEDULED 모드가 아닐 때만)
+  # stdout output (only when not in SCHEDULED mode)
   if [[ "${MAC_OPS_SCHEDULED}" != "true" ]]; then
     if [[ "${level}" == "ERROR" || "${level}" == "WARN" ]]; then
       print -- "${formatted}" >&2
@@ -59,7 +64,7 @@ mac_ops_log() {
 }
 
 # -----------------------------------------------------------------------------
-# 단축 로그 함수들
+# Shortcut log functions
 # -----------------------------------------------------------------------------
 mac_ops_log_info() {
   mac_ops_log "INFO" "${1}"
@@ -78,32 +83,32 @@ mac_ops_log_debug() {
 }
 
 # -----------------------------------------------------------------------------
-# 로그 파일 로테이션
-# 5MB 초과 시 실행, 최대 7개 보관
-# mac-ops.log -> mac-ops.log.1 -> ... -> mac-ops.log.7 (삭제)
+# Log file rotation
+# Execute when exceeds 5MB, keep maximum 7 files
+# mac-ops.log -> mac-ops.log.1 -> ... -> mac-ops.log.7 (deleted)
 # -----------------------------------------------------------------------------
 mac_ops_log_rotate() {
-  # 로그 파일이 없으면 할 일 없음
+  # Nothing to do if log file does not exist
   if [[ ! -f "${MAC_OPS_LOG_FILE}" ]]; then
     return 0
   fi
 
-  # 현재 로그 파일 크기 확인 (바이트)
+  # Check current log file size (bytes)
   local file_size
   file_size=$(stat -f%z "${MAC_OPS_LOG_FILE}" 2>/dev/null || echo 0)
 
-  # 5MB 이하면 로테이션 불필요
+  # No rotation needed if 5MB or less
   if [[ ${file_size} -le ${MAC_OPS_LOG_MAX_SIZE} ]]; then
     return 0
   fi
 
-  # 가장 오래된 로그 삭제 (최대 보관 수 초과분)
+  # Delete oldest log (exceeding maximum retention)
   local i=${MAC_OPS_LOG_MAX_FILES}
   if [[ -f "${MAC_OPS_LOG_FILE}.${i}" ]]; then
     rm -f "${MAC_OPS_LOG_FILE}.${i}"
   fi
 
-  # 기존 로그 파일 번호 증가 (역순으로)
+  # Increase existing log file numbers (in reverse order)
   i=$((MAC_OPS_LOG_MAX_FILES - 1))
   while [[ ${i} -ge 1 ]]; do
     if [[ -f "${MAC_OPS_LOG_FILE}.${i}" ]]; then
@@ -112,11 +117,12 @@ mac_ops_log_rotate() {
     i=$((i - 1))
   done
 
-  # 현재 로그를 .1로 이동
+  # Move current log to .1
   mv "${MAC_OPS_LOG_FILE}" "${MAC_OPS_LOG_FILE}.1"
 
-  # 새 로그 파일 생성
+  # Create new log file (readable/writable only by owner)
   touch "${MAC_OPS_LOG_FILE}"
+  chmod 600 "${MAC_OPS_LOG_FILE}"
 
   return 0
 }

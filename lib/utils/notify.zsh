@@ -1,26 +1,26 @@
 # lib/utils/notify.zsh
-# macOS 시스템 알림 유틸리티
+# macOS system notification utilities
 
-# macOS 시스템 알림 전송
-# 인자: title, message
-# MAC_OPS_SCHEDULED=true일 때만 알림 전송 (인터랙티브 모드에서는 stdout으로 이미 보임)
+# Send macOS system notification
+# Args: title, message
+# Only send notification when MAC_OPS_SCHEDULED=true (interactive mode already shows output via stdout)
 mac_ops_notify() {
   local title="$1"
   local message="$2"
 
-  # 스케줄 모드가 아니면 알림하지 않음
+  # Do not notify if not in scheduled mode
   if [[ "$MAC_OPS_SCHEDULED" != "true" ]]; then
     return 0
   fi
 
-  # osascript가 실패해도 (예: headless 환경) 에러를 무시
+  # Ignore errors even if osascript fails (e.g., headless environment)
   osascript -e "display notification \"$message\" with title \"$title\"" 2>/dev/null || true
   return 0
 }
 
-# 정리 완료 알림
-# 인자: cleaned_count, cleaned_bytes, killed_procs
-# 정리된 항목이 0이면 알림하지 않음
+# Cleanup completion notification
+# Args: cleaned_count, cleaned_bytes, killed_procs
+# Do not notify if no items were cleaned (count is 0)
 mac_ops_notify_completion() {
   local cleaned_count="$1"
   local cleaned_bytes="$2"
@@ -29,24 +29,24 @@ mac_ops_notify_completion() {
   local message_parts=()
   local message
 
-  # 정리된 항목이 없으면 알림하지 않음
+  # Do not notify if no items were cleaned
   if [[ "$cleaned_count" == "0" && "$killed_procs" == "0" ]]; then
     return 0
   fi
 
-  # 메시지 구성
+  # Compose message
   if [[ -n "$cleaned_count" && "$cleaned_count" != "0" ]]; then
     formatted_size=$(mac_ops_format_bytes "$cleaned_bytes")
-    message_parts+=("파일 ${cleaned_count}개 정리, ${formatted_size} 확보")
+    message_parts+=("${cleaned_count} files cleaned, ${formatted_size} freed")
   fi
 
   if [[ -n "$killed_procs" && "$killed_procs" != "0" ]]; then
-    message_parts+=("프로세스 ${killed_procs}개 종료")
+    message_parts+=("${killed_procs} processes terminated")
   fi
 
-  # 메시지 결합
+  # Join message parts
   message="${(j:, :)message_parts}"
 
-  # 알림 전송
-  mac_ops_notify "Mac-Ops 정리 완료" "$message"
+  # Send notification
+  mac_ops_notify "Mac-Ops Cleanup Completed" "$message"
 }

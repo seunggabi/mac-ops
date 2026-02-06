@@ -1,13 +1,13 @@
 # =============================================================================
-# mac-ops: 고아 앱 데이터 정리 모듈
-# 삭제된 앱의 잔존 파일(Application Support, Caches, Preferences 등)을 탐지하여 정리
-# com.apple.* 제외, Group Containers 제외, 최근 7일 이내 수정된 파일 제외
+# mac-ops: Orphan app data cleanup module
+# Detect and cleanup leftover files from deleted apps (Application Support, Caches, Preferences, etc.)
+# Excludes com.apple.*, Group Containers, files modified within last 7 days
 # =============================================================================
 
-# --- 기본 설정 ---
+# --- Default settings ---
 MAC_OPS_ORPHAN_APP_GRACE_DAYS=${MAC_OPS_ORPHAN_APP_GRACE_DAYS:-7}
 
-# --- 스캔 대상 경로 ---
+# --- Scan target paths ---
 MAC_OPS_ORPHAN_APP_SCAN_DIRS=(
   "${HOME}/Library/Application Support"
   "${HOME}/Library/Caches"
@@ -19,36 +19,36 @@ MAC_OPS_ORPHAN_APP_SCAN_DIRS=(
 )
 
 # -----------------------------------------------------------------------------
-# 고아 앱 데이터 정리 메인 함수
-# 1. /Applications, ~/Applications에서 설치된 앱의 번들 ID 추출
-# 2. 스캔 대상 경로에서 번들 ID 패턴의 디렉토리/파일 탐색
-# 3. 설치된 앱 목록에 없으면 고아 파일로 판정하여 정리
+# Orphan app data cleanup main function
+# 1. Extract bundle IDs of installed apps from /Applications, ~/Applications
+# 2. Search for bundle ID pattern directories/files in scan target paths
+# 3. If not in installed apps list, determine as orphan file and cleanup
 # -----------------------------------------------------------------------------
 mac_ops_orphan_app_cleanup() {
-  mac_ops_log_info "고아 앱 데이터 정리 시작"
+  mac_ops_log_info "Orphan app data cleanup started"
 
-  # 1단계: 설치된 앱의 번들 ID 수집 (글로벌 연관 배열 사용)
+  # Stage 1: Collect bundle IDs of installed apps (using global associative array)
   typeset -gA _MAC_OPS_INSTALLED_BUNDLES
   _MAC_OPS_INSTALLED_BUNDLES=()
   _mac_ops_collect_installed_bundles
 
   local bundle_count=${#_MAC_OPS_INSTALLED_BUNDLES[@]}
-  mac_ops_log_info "설치된 앱 번들 ID ${bundle_count}개 수집됨"
+  mac_ops_log_info "${bundle_count} installed app bundle IDs collected"
 
   if [[ ${bundle_count} -eq 0 ]]; then
-    mac_ops_log_warn "설치된 앱 번들 ID를 수집하지 못했습니다. 안전을 위해 중단합니다."
+    mac_ops_log_warn "Failed to collect installed app bundle IDs. Aborting for safety."
     return 1
   fi
 
-  # 2단계: 각 스캔 대상 경로에서 고아 데이터 탐색
+  # Stage 2: Search for orphan data in each scan target path
   local total_cleaned=0
   for scan_dir in "${MAC_OPS_ORPHAN_APP_SCAN_DIRS[@]}"; do
     if [[ ! -d "${scan_dir}" ]]; then
-      mac_ops_log_debug "스캔 대상 경로 없음: ${scan_dir}"
+      mac_ops_log_debug "Scan target path not found: ${scan_dir}"
       continue
     fi
 
-    # Preferences 디렉토리는 plist 파일 기반으로 처리
+    # Process Preferences directory based on plist files
     if [[ "${scan_dir}" == *"/Preferences" ]]; then
       _mac_ops_scan_preferences "${scan_dir}"
     else
@@ -56,17 +56,17 @@ mac_ops_orphan_app_cleanup() {
     fi
   done
 
-  # 글로벌 변수 정리
+  # Cleanup global variable
   unset _MAC_OPS_INSTALLED_BUNDLES
 
-  mac_ops_log_info "고아 앱 데이터 정리 완료"
+  mac_ops_log_info "Orphan app data cleanup completed"
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# 내부: 설치된 앱의 번들 ID를 연관 배열에 수집
-# /Applications/*.app, ~/Applications/*.app 모두 포함
-# 사용법: _mac_ops_collect_installed_bundles <연관배열명>
+# Internal: Collect bundle IDs of installed apps into associative array
+# Includes both /Applications/*.app and ~/Applications/*.app
+# Usage: _mac_ops_collect_installed_bundles <associative_array_name>
 # -----------------------------------------------------------------------------
 _mac_ops_collect_installed_bundles() {
   local app_dirs=("/Applications" "${HOME}/Applications")
@@ -81,24 +81,24 @@ _mac_ops_collect_installed_bundles() {
 
       info_plist="${app_path}/Contents/Info.plist"
       if [[ ! -f "${info_plist}" ]]; then
-        mac_ops_log_debug "Info.plist 없음: ${app_path}"
+        mac_ops_log_debug "Info.plist not found: ${app_path}"
         continue
       fi
 
-      # 번들 ID 추출
+      # Extract bundle ID
       bundle_id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "${info_plist}" 2>/dev/null)
       if [[ -n "${bundle_id}" ]]; then
         _MAC_OPS_INSTALLED_BUNDLES[${bundle_id}]=1
-        mac_ops_log_debug "번들 ID 수집: ${bundle_id} (${app_path})"
+        mac_ops_log_debug "Bundle ID collected: ${bundle_id} (${app_path})"
       fi
     done
   done
 }
 
 # -----------------------------------------------------------------------------
-# 내부: 디렉토리에서 고아 번들 ID 항목 탐색 및 정리
-# 디렉토리명이 번들 ID 패턴(com.xxx.xxx)이면서 설치 목록에 없는 것을 처리
-# 사용법: _mac_ops_scan_directory <스캔경로> <설치된번들배열명>
+# Internal: Search and cleanup orphan bundle ID entries in directory
+# Process directories whose name matches bundle ID pattern (com.xxx.xxx) but not in installed list
+# Usage: _mac_ops_scan_directory <scan_path> <installed_bundles_array_name>
 # -----------------------------------------------------------------------------
 _mac_ops_scan_directory() {
   local scan_dir="${1}"
@@ -112,61 +112,61 @@ _mac_ops_scan_directory() {
 
   now_epoch=$(date +%s)
 
-  mac_ops_log_info "고아 데이터 스캔: ${scan_dir}"
+  mac_ops_log_info "Orphan data scan: ${scan_dir}"
 
   count=0
 
-  # 1단계 하위 항목만 순회 (번들 ID 디렉토리)
+  # Iterate only 1st level subitems (bundle ID directories)
   for item in "${scan_dir}"/*(N); do
     item_name=$(basename "${item}")
 
-    # 번들 ID 패턴 매칭 (com.xxx.xxx 또는 org.xxx.xxx 등)
-    # 최소 2개의 점(.)이 포함된 역도메인 형식
+    # Bundle ID pattern matching (com.xxx.xxx or org.xxx.xxx, etc.)
+    # Reverse domain format with at least 2 dots (.)
     if [[ ! "${item_name}" =~ ^[a-zA-Z][a-zA-Z0-9-]*\.[a-zA-Z][a-zA-Z0-9-]*\..+ ]]; then
       continue
     fi
 
-    # com.apple.* 제외 (시스템 데이터)
+    # Exclude com.apple.* (system data)
     if [[ "${item_name}" == com.apple.* ]]; then
       continue
     fi
 
-    # Group Containers 하위는 처리하지 않음 (여러 앱이 공유 가능)
+    # Don't process Group Containers subdirectories (can be shared by multiple apps)
     if [[ "${scan_dir}" == *"Group Containers"* ]]; then
       continue
     fi
 
-    # 설치된 앱 목록에 있으면 건너뜀
+    # Skip if in installed apps list
     if [[ -n "${_MAC_OPS_INSTALLED_BUNDLES[${item_name}]+_}" ]]; then
       continue
     fi
 
-    # 최근 수정 여부 확인 (grace period)
+    # Check recent modification (grace period)
     mtime=$(stat -f%m "${item}" 2>/dev/null)
     if [[ -n "${mtime}" && "${mtime}" =~ ^[0-9]+$ ]]; then
       age_seconds=$((now_epoch - mtime))
       if [[ ${age_seconds} -lt ${grace_seconds} ]]; then
-        mac_ops_log_debug "최근 수정됨, 건너뜀: ${item_name} (${age_seconds}초 전)"
+        mac_ops_log_debug "Recently modified, skipped: ${item_name} (${age_seconds} seconds ago)"
         continue
       fi
     fi
 
-    # 안전성 체크
+    # Safety check
     if ! mac_ops_is_path_safe "${item}"; then
       continue
     fi
 
-    # 크기 가드 체크
+    # Size guard check
     if ! mac_ops_check_size_guard "${item}"; then
       continue
     fi
 
-    # 파일/디렉토리 크기 기록
+    # Record file/directory size
     item_size=$(mac_ops_get_dir_size "${item}")
 
-    mac_ops_log_info "고아 앱 데이터 발견: ${item_name} ($(mac_ops_format_bytes "${item_size}"))"
+    mac_ops_log_info "Orphan app data found: ${item_name} ($(mac_ops_format_bytes "${item_size}"))"
 
-    # 휴지통으로 이동
+    # Move to trash
     if mac_ops_trash_move "${item}" "orphan-app-data" "orphan-app-cleanup"; then
       MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
       MAC_OPS_CLEANED_BYTES=$((${MAC_OPS_CLEANED_BYTES:-0} + item_size))
@@ -174,14 +174,14 @@ _mac_ops_scan_directory() {
     fi
   done
 
-  mac_ops_log_info "${scan_dir}: ${count}개 고아 항목 정리됨"
+  mac_ops_log_info "${scan_dir}: ${count} orphan items cleaned"
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# 내부: ~/Library/Preferences에서 고아 plist 파일 탐색 및 정리
-# *.plist 파일명에서 번들 ID를 추출하여 매칭
-# 사용법: _mac_ops_scan_preferences <Preferences경로> <설치된번들배열명>
+# Internal: Search and cleanup orphan plist files in ~/Library/Preferences
+# Extract bundle ID from *.plist filename and match
+# Usage: _mac_ops_scan_preferences <Preferences_path> <installed_bundles_array_name>
 # -----------------------------------------------------------------------------
 _mac_ops_scan_preferences() {
   local pref_dir="${1}"
@@ -195,32 +195,32 @@ _mac_ops_scan_preferences() {
 
   now_epoch=$(date +%s)
 
-  mac_ops_log_info "고아 Preferences 스캔: ${pref_dir}"
+  mac_ops_log_info "Orphan Preferences scan: ${pref_dir}"
 
   count=0
 
   for plist_file in "${pref_dir}"/*.plist(N); do
     [[ ! -f "${plist_file}" ]] && continue
 
-    # 파일명에서 번들 ID 추출 (com.xxx.xxx.plist -> com.xxx.xxx)
+    # Extract bundle ID from filename (com.xxx.xxx.plist -> com.xxx.xxx)
     file_name=$(basename "${plist_file}" .plist)
 
-    # 번들 ID 패턴 매칭
+    # Bundle ID pattern matching
     if [[ ! "${file_name}" =~ ^[a-zA-Z][a-zA-Z0-9-]*\.[a-zA-Z][a-zA-Z0-9-]*\..+ ]]; then
       continue
     fi
 
-    # com.apple.* 제외
+    # Exclude com.apple.*
     if [[ "${file_name}" == com.apple.* ]]; then
       continue
     fi
 
-    # 설치된 앱 목록에 있으면 건너뜀
+    # Skip if in installed apps list
     if [[ -n "${_MAC_OPS_INSTALLED_BUNDLES[${file_name}]+_}" ]]; then
       continue
     fi
 
-    # 최근 수정 여부 확인
+    # Check recent modification
     mtime=$(stat -f%m "${plist_file}" 2>/dev/null)
     if [[ -n "${mtime}" && "${mtime}" =~ ^[0-9]+$ ]]; then
       age_seconds=$((now_epoch - mtime))
@@ -229,21 +229,21 @@ _mac_ops_scan_preferences() {
       fi
     fi
 
-    # 안전성 체크 -- Preferences는 화이트리스트에 포함되어 있으므로
-    # 개별 plist 파일 단위로는 안전 (상위 디렉토리 자체가 보호 대상)
-    # is_path_safe는 상위 디렉토리 ~/Library/Preferences를 보호하므로
-    # 하위 파일에 대해 직접 호출하면 차단됨 -> 여기서는 개별 파일이므로 스킵
-    # 대신 크기 가드만 체크
+    # Safety check -- Preferences is in whitelist so
+    # individual plist files are safe (parent directory itself is protected)
+    # is_path_safe protects parent directory ~/Library/Preferences so
+    # direct call on subfiles will block -> skip here for individual files
+    # Check only size guard instead
     if ! mac_ops_check_size_guard "${plist_file}"; then
       continue
     fi
 
-    # 파일 크기 기록
+    # Record file size
     file_size=$(mac_ops_get_dir_size "${plist_file}")
 
-    mac_ops_log_info "고아 Preference 발견: ${file_name}.plist ($(mac_ops_format_bytes "${file_size}"))"
+    mac_ops_log_info "Orphan Preference found: ${file_name}.plist ($(mac_ops_format_bytes "${file_size}"))"
 
-    # 휴지통으로 이동
+    # Move to trash
     if mac_ops_trash_move "${plist_file}" "orphan-app-preference" "orphan-app-cleanup"; then
       MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
       MAC_OPS_CLEANED_BYTES=$((${MAC_OPS_CLEANED_BYTES:-0} + file_size))
@@ -251,6 +251,6 @@ _mac_ops_scan_preferences() {
     fi
   done
 
-  mac_ops_log_info "${pref_dir}: ${count}개 고아 Preference 정리됨"
+  mac_ops_log_info "${pref_dir}: ${count} orphan Preferences cleaned"
   return 0
 }

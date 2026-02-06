@@ -1,18 +1,18 @@
 #!/bin/zsh
 # =============================================================================
-# mac-ops: macOS 최적화 CLI 도구
-# 메인 엔트리포인트
+# mac-ops: macOS optimization CLI tool
+# Main entry point
 # =============================================================================
 
 setopt ERR_EXIT PIPE_FAIL
 
-# --- 시스템 PATH 보장 ---
-export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:${PATH}"
+# --- Ensure system PATH ---
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
 
-# --- 스크립트 위치 기준 루트 경로 ---
+# --- Root path based on script location ---
 MAC_OPS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# --- 모듈 로딩 ---
+# --- Module loading ---
 source "${MAC_OPS_ROOT}/lib/core/config.zsh"
 source "${MAC_OPS_ROOT}/lib/core/logger.zsh"
 source "${MAC_OPS_ROOT}/lib/core/lock.zsh"
@@ -35,10 +35,10 @@ source "${MAC_OPS_ROOT}/lib/modules/docker-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/browser-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/analyze.zsh"
 
-# --- 버전 ---
+# --- Version ---
 MAC_OPS_VERSION="1.0.0"
 
-# --- 모듈명 -> 함수명 매핑 ---
+# --- Module name -> function name mapping ---
 typeset -A MAC_OPS_MODULE_MAP
 MAC_OPS_MODULE_MAP=(
   cache       mac_ops_cache_cleanup
@@ -54,36 +54,36 @@ MAC_OPS_MODULE_MAP=(
 )
 
 # =============================================================================
-# 도움말
+# Help
 # =============================================================================
 _mac_ops_show_help() {
   cat <<'HELP'
-mac-ops - macOS 최적화 CLI 도구
+mac-ops - macOS optimization CLI tool
 
-사용법:
+Usage:
   mac-ops [command] [options]
 
 Commands:
-  run              정리 실행 (기본 명령어, command 생략 시 기본값)
-  analyze          디스크 공간 분석 리포트
-  status           휴지통 상태, 디스크 사용량 표시
-  restore <path>   휴지통에서 원래 위치로 복원
-  list-trash       휴지통 내역 조회
-  purge            만료된 휴지통 항목 즉시 삭제
-  install          launchd 에이전트 설치
-  uninstall        launchd 에이전트 제거
-  config           현재 설정 표시
-  help             도움말 표시
-  version          버전 표시
+  run              Run cleanup (default command)
+  analyze          Disk space analysis report
+  status           Show trash status and disk usage
+  restore <path>   Restore from trash to original location
+  list-trash       List trash contents
+  purge            Purge expired trash items immediately
+  install          Install launchd agent
+  uninstall        Uninstall launchd agent
+  config           Show current configuration
+  help             Show help
+  version          Show version
 
 Options:
-  --dry-run        실제 실행 없이 미리보기
-  --module=NAME    특정 모듈만 실행
-  --verbose        상세 로그 출력
-  --force          크기 가드 무시
-  --scheduled      launchd에서 실행 시 내부 플래그
+  --dry-run        Preview without actual execution
+  --module=NAME    Run specific module only
+  --verbose        Verbose log output
+  --force          Ignore size guard
+  --scheduled      Internal flag when run from launchd
 
-모듈 목록:
+Available modules:
   cache, tmp, log, zombie, orphan, orphan-app, brew, dev, docker, browser
 HELP
 }
@@ -96,56 +96,56 @@ _mac_ops_show_version() {
 }
 
 # =============================================================================
-# run 명령어
+# run command
 # =============================================================================
 _mac_ops_cmd_run() {
   local target_module="${1:-}"
 
-  # 1. 디렉토리 초기화
+  # 1. Initialize directories
   mac_ops_init_dirs
 
-  # 2. 설정 로드
+  # 2. Load configuration
   mac_ops_load_config
 
-  # 3. 로그 로테이션
+  # 3. Log rotation
   mac_ops_log_rotate
 
-  # 4. 락 획득 - 실패 시 종료
+  # 4. Acquire lock - exit on failure
   if ! mac_ops_acquire_lock; then
-    mac_ops_log_error "다른 mac-ops가 이미 실행 중입니다. 종료합니다."
+    mac_ops_log_error "Another mac-ops instance is already running. Exiting."
     return 1
   fi
 
-  # 5. 트랩 설정
+  # 5. Setup trap
   mac_ops_setup_trap
 
-  # 6. 디스크 위험 시 긴급 퍼지
+  # 6. Emergency purge on disk danger
   mac_ops_emergency_purge || true
 
-  # 7. 전역 카운터 초기화
+  # 7. Initialize global counters
   MAC_OPS_CLEANED_COUNT=0
   MAC_OPS_CLEANED_BYTES=0
   MAC_OPS_KILLED_COUNT=0
 
-  # 통계 수집용 임시 디렉토리
+  # Temporary directory for statistics collection
   local stats_dir="${MAC_OPS_HOME}/.tmp/stats_$$"
   local mod_count=0 mod_bytes=0
   mkdir -p "${stats_dir}" 2>/dev/null
 
-  # 8. 모듈 실행
+  # 8. Module execution
   if [[ -n "${target_module}" ]]; then
-    # --module 지정 시 해당 모듈만 실행
+    # Run only specified module when --module is given
     if [[ -z "${MAC_OPS_MODULE_MAP[${target_module}]+_}" ]]; then
-      mac_ops_log_error "알 수 없는 모듈: ${target_module}"
+      mac_ops_log_error "Unknown module: ${target_module}"
       mac_ops_release_lock
       return 1
     fi
 
     local func="${MAC_OPS_MODULE_MAP[${target_module}]}"
-    mac_ops_log_info "모듈 실행: ${target_module} (${func})"
+    mac_ops_log_info "Running module: ${target_module} (${func})"
     ${func} || true
   else
-    # 파일 정리 모듈: 각 모듈을 래핑하여 통계를 파일에 기록
+    # File cleanup modules: wrap each module to record statistics to file
     local file_modules=(
       mac_ops_cache_cleanup
       mac_ops_tmp_cleanup
@@ -157,25 +157,24 @@ _mac_ops_cmd_run() {
       mac_ops_browser_cleanup
     )
 
-    mac_ops_log_info "파일 정리 모듈 병렬 실행 시작"
+    mac_ops_log_info "Starting parallel execution of file cleanup modules (timeout: ${MAC_OPS_PARALLEL_TIMEOUT_SECONDS:-300}s per module)"
     local -a pids=()
     for mod_func in "${file_modules[@]}"; do
       (
         MAC_OPS_CLEANED_COUNT=0
         MAC_OPS_CLEANED_BYTES=0
         ${mod_func} || true
-        # 통계를 파일에 기록
+        # Record statistics to file
         print "${MAC_OPS_CLEANED_COUNT} ${MAC_OPS_CLEANED_BYTES}" > "${stats_dir}/${mod_func}.stats"
       ) &
       pids+=($!)
     done
 
-    # 모든 병렬 모듈 완료 대기
-    for pid in "${pids[@]}"; do
-      wait ${pid} 2>/dev/null || true
-    done
+    # Wait for all parallel modules to complete with timeout monitoring
+    mac_ops_parallel_wait_with_timeout "${MAC_OPS_PARALLEL_TIMEOUT_SECONDS:-300}" "${pids[@]}" || \
+      mac_ops_log_warn "Some modules timed out or failed during parallel execution"
 
-    # 통계 파일에서 합산
+    # Sum up from statistics files
     for stats_file in "${stats_dir}"/*.stats(N); do
       [[ ! -f "${stats_file}" ]] && continue
       mod_count=0; mod_bytes=0
@@ -184,41 +183,41 @@ _mac_ops_cmd_run() {
       MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + ${mod_bytes:-0}))
     done
 
-    # 프로세스 모듈 순차 실행
-    mac_ops_log_info "프로세스 모듈 순차 실행 시작"
+    # Process modules sequential execution
+    mac_ops_log_info "Starting sequential execution of process modules"
     mac_ops_zombie_killer || true
     mac_ops_orphan_killer || true
   fi
 
-  # 통계 임시 디렉토리 정리
+  # Cleanup statistics temporary directory
   rm -rf "${stats_dir}" 2>/dev/null
 
-  # 9. 만료 파일 삭제 (72시간 기준)
+  # 9. Delete expired files (72 hour threshold)
   mac_ops_trash_expire || true
 
-  # 10. 락 해제
+  # 10. Release lock
   mac_ops_release_lock
 
-  # 11. 결과 요약
+  # 11. Result summary
   mac_ops_print_summary "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}"
 
-  # 12. macOS 알림 (scheduled 모드)
+  # 12. macOS notification (scheduled mode)
   mac_ops_notify_completion "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}"
 }
 
 # =============================================================================
-# status 명령어
+# status command
 # =============================================================================
 _mac_ops_cmd_status() {
   mac_ops_init_dirs
   mac_ops_load_config
 
-  # 휴지통 상태
+  # Trash status
   mac_ops_trash_status
 
   print ""
 
-  # 디스크 사용량
+  # Disk usage
   local disk_usage disk_available
   disk_usage=$(mac_ops_get_disk_usage) || disk_usage="N/A"
   disk_available=$(mac_ops_get_disk_available) || disk_available="0"
@@ -226,29 +225,29 @@ _mac_ops_cmd_status() {
   local available_human
   available_human=$(mac_ops_format_bytes "${disk_available}")
 
-  print "=== 디스크 상태 ==="
-  print "사용량:     ${disk_usage}%"
-  print "가용 공간:  ${available_human}"
+  print "=== Disk Status ==="
+  print "Usage:           ${disk_usage}%"
+  print "Available space: ${available_human}"
 
   print ""
 
-  # launchd 에이전트 상태
-  print "=== launchd 에이전트 ==="
+  # launchd agent status
+  print "=== launchd Agent ==="
   if launchctl list 2>/dev/null | grep -q "com.mac-ops" 2>/dev/null; then
-    print "상태: 설치됨 (활성)"
+    print "Status: Installed (Active)"
   else
-    print "상태: 미설치"
+    print "Status: Not installed"
   fi
 }
 
 # =============================================================================
-# restore 명령어
+# restore command
 # =============================================================================
 _mac_ops_cmd_restore() {
   local restore_path="${1:-}"
 
   if [[ -z "${restore_path}" ]]; then
-    mac_ops_log_error "사용법: mac-ops restore <경로>"
+    mac_ops_log_error "Usage: mac-ops restore <path>"
     return 1
   fi
 
@@ -258,7 +257,7 @@ _mac_ops_cmd_restore() {
 }
 
 # =============================================================================
-# list-trash 명령어
+# list-trash command
 # =============================================================================
 _mac_ops_cmd_list_trash() {
   mac_ops_init_dirs
@@ -267,7 +266,7 @@ _mac_ops_cmd_list_trash() {
 }
 
 # =============================================================================
-# purge 명령어
+# purge command
 # =============================================================================
 _mac_ops_cmd_purge() {
   mac_ops_init_dirs
@@ -276,7 +275,7 @@ _mac_ops_cmd_purge() {
 }
 
 # =============================================================================
-# install 명령어
+# install command
 # =============================================================================
 _mac_ops_cmd_install() {
   local plist_src="${MAC_OPS_ROOT}/launchd/com.mac-ops.cleanup.plist"
@@ -285,14 +284,14 @@ _mac_ops_cmd_install() {
   local home_path="${HOME}/.mac-ops"
 
   if [[ ! -f "${plist_src}" ]]; then
-    mac_ops_log_error "plist 템플릿이 없습니다: ${plist_src}"
+    mac_ops_log_error "plist template not found: ${plist_src}"
     return 1
   fi
 
-  # 1. LaunchAgents 디렉토리 확인
+  # 1. Ensure LaunchAgents directory
   mkdir -p "${HOME}/Library/LaunchAgents" 2>/dev/null || true
 
-  # 2. plist 복사 및 플레이스홀더 치환
+  # 2. Copy plist and replace placeholders
   sed -e "s|REPLACEME_MAC_OPS_BIN|${bin_path}|g" \
       -e "s|REPLACEME_MAC_OPS_HOME|${home_path}|g" \
       "${plist_src}" > "${plist_dst}"
@@ -300,44 +299,44 @@ _mac_ops_cmd_install() {
   # 3. launchctl load
   launchctl load "${plist_dst}" 2>/dev/null || true
 
-  mac_ops_log_info "launchd 에이전트 설치 완료: ${plist_dst}"
+  mac_ops_log_info "launchd agent installed: ${plist_dst}"
 
-  # 4. FDA 권한 안내
+  # 4. FDA permission guide
   print ""
   print "========================================================"
-  print " FDA (Full Disk Access) 권한 설정이 필요합니다."
+  print " FDA (Full Disk Access) permission is required."
   print ""
-  print " 시스템 설정 > 개인정보 보호 및 보안 > Full Disk Access"
-  print " 에서 다음 항목을 추가해주세요:"
+  print " System Settings > Privacy & Security > Full Disk Access"
+  print " Please add the following item:"
   print ""
   print "   ${bin_path}"
   print ""
-  print " FDA 권한이 없으면 일부 캐시/로그 경로에 접근할 수 없습니다."
+  print " Without FDA permission, some cache/log paths cannot be accessed."
   print "========================================================"
 }
 
 # =============================================================================
-# uninstall 명령어
+# uninstall command
 # =============================================================================
 _mac_ops_cmd_uninstall() {
   local plist_path="${HOME}/Library/LaunchAgents/com.mac-ops.cleanup.plist"
 
   if [[ ! -f "${plist_path}" ]]; then
-    mac_ops_log_warn "launchd 에이전트가 설치되어 있지 않습니다."
+    mac_ops_log_warn "launchd agent is not installed."
     return 0
   fi
 
   # 1. launchctl unload
   launchctl unload "${plist_path}" 2>/dev/null || true
 
-  # 2. plist 삭제
+  # 2. Delete plist
   rm -f "${plist_path}"
 
-  mac_ops_log_info "launchd 에이전트 제거 완료"
+  mac_ops_log_info "launchd agent uninstalled"
 }
 
 # =============================================================================
-# analyze 명령어
+# analyze command
 # =============================================================================
 _mac_ops_cmd_analyze() {
   mac_ops_init_dirs
@@ -346,13 +345,13 @@ _mac_ops_cmd_analyze() {
 }
 
 # =============================================================================
-# config 명령어
+# config command
 # =============================================================================
 _mac_ops_cmd_config() {
   mac_ops_init_dirs
   mac_ops_load_config
 
-  print "=== mac-ops 현재 설정 ==="
+  print "=== mac-ops Current Configuration ==="
   print "MAC_OPS_HOME                     = ${MAC_OPS_HOME}"
   print "MAC_OPS_TRASH_DIR                = ${MAC_OPS_TRASH_DIR}"
   print "MAC_OPS_META_DIR                 = ${MAC_OPS_META_DIR}"
@@ -374,14 +373,14 @@ _mac_ops_cmd_config() {
 }
 
 # =============================================================================
-# CLI 파싱 및 메인
+# CLI parsing and main
 # =============================================================================
 _mac_ops_main() {
   local command="run"
   local module_name=""
   local restore_path=""
 
-  # 인자 파싱
+  # Parse arguments
   while [[ $# -gt 0 ]]; do
     case "${1}" in
       run|analyze|status|list-trash|purge|install|uninstall|config|help|version)
@@ -391,7 +390,7 @@ _mac_ops_main() {
       restore)
         command="restore"
         shift
-        # restore 뒤의 경로 인자 캡처
+        # Capture path argument after restore
         if [[ $# -gt 0 && "${1}" != --* ]]; then
           restore_path="${1}"
           shift
@@ -426,14 +425,14 @@ _mac_ops_main() {
         shift
         ;;
       *)
-        print -- "[ERROR] 알 수 없는 인자: ${1}" >&2
+        print -- "[ERROR] Unknown argument: ${1}" >&2
         _mac_ops_show_help
         return 1
         ;;
     esac
   done
 
-  # 명령어 실행
+  # Execute command
   case "${command}" in
     run)
       _mac_ops_cmd_run "${module_name}"
@@ -471,5 +470,5 @@ _mac_ops_main() {
   esac
 }
 
-# --- 실행 ---
+# --- Execute ---
 _mac_ops_main "$@"

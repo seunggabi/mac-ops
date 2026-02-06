@@ -1,11 +1,11 @@
 # =============================================================================
-# mac-ops: 공간 분석 모듈
-# 각 정리 대상 경로의 현재 크기를 분석하여 리포트 출력
+# mac-ops: Disk space analysis module
+# Analyze current size of each cleanup target path and output report
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# 공간 분석 리포트
-# 각 정리 대상 경로의 현재 크기를 확인하여 절약 가능한 공간 표시
+# Disk space analysis report
+# Check current size of each cleanup target path and show reclaimable space
 # -----------------------------------------------------------------------------
 mac_ops_analyze() {
   setopt LOCAL_OPTIONS NO_ERR_EXIT
@@ -30,22 +30,22 @@ mac_ops_analyze() {
 
   current_user="${USER}"
 
-  mac_ops_log_info "디스크 공간 분석을 시작합니다..."
+  mac_ops_log_info "Starting disk space analysis..."
   echo ""
   echo "$(mac_ops_color_bold '==========================================')"
-  echo "$(mac_ops_color_bold '        mac-ops 디스크 공간 분석')"
+  echo "$(mac_ops_color_bold '        mac-ops Disk Space Analysis')"
   echo "$(mac_ops_color_bold '==========================================')"
   echo ""
 
   # 1. ~/Library/Caches
-  category_name="시스템 캐시"
+  category_name="System Cache"
   target_path="${HOME}/Library/Caches"
   if [[ -d "${target_path}" ]]; then
     cache_total=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${cache_total}")
-    echo "$(mac_ops_color_blue '●') ${category_name} (전체): ${formatted_size}"
+    echo "$(mac_ops_color_blue '●') ${category_name} (Total): ${formatted_size}"
 
-    # com.apple.* 제외한 크기 계산
+    # Calculate size excluding com.apple.*
     cache_non_apple=0
     for bundle_dir in "${target_path}"/*(/N); do
       bundle_name=$(basename "${bundle_dir}")
@@ -55,7 +55,7 @@ mac_ops_analyze() {
       fi
     done
 
-    # 최상위 파일도 포함 (com.apple.* 제외)
+    # Include top-level files (excluding com.apple.*)
     for cache_file in "${target_path}"/*(-.N); do
       file_basename=$(basename "${cache_file}")
       if [[ "${file_basename}" != com.apple.* ]]; then
@@ -65,23 +65,23 @@ mac_ops_analyze() {
     done
 
     formatted_size=$(mac_ops_format_bytes "${cache_non_apple}")
-    echo "  $(mac_ops_color_green '└─') Apple 제외: ${formatted_size}"
+    echo "  $(mac_ops_color_green '└─') Excluding Apple: ${formatted_size}"
     total_bytes=$((total_bytes + cache_non_apple))
-    mac_ops_log_debug "시스템 캐시: ${formatted_size} (Apple 제외)"
+    mac_ops_log_debug "System cache: ${formatted_size} (Excluding Apple)"
   else
     echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
-    mac_ops_log_debug "시스템 캐시 디렉토리 없음"
+    mac_ops_log_debug "System cache directory not found"
   fi
 
   # 2. ~/Library/Logs
-  category_name="시스템 로그"
+  category_name="System Logs"
   target_path="${HOME}/Library/Logs"
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
     echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
-    mac_ops_log_debug "시스템 로그: ${formatted_size}"
+    mac_ops_log_debug "System logs: ${formatted_size}"
   else
     echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
@@ -96,11 +96,11 @@ mac_ops_analyze() {
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "Xcode DerivedData: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: 미설치"
+    echo "$(mac_ops_color_blue '●') ${category_name}: Not installed"
   fi
 
-  # 4. Homebrew 캐시
-  category_name="Homebrew 캐시"
+  # 4. Homebrew cache
+  category_name="Homebrew Cache"
   if command -v brew &>/dev/null; then
     target_path=$(brew --cache 2>/dev/null)
     if [[ -n "${target_path}" && -d "${target_path}" ]]; then
@@ -108,41 +108,41 @@ mac_ops_analyze() {
       formatted_size=$(mac_ops_format_bytes "${size_bytes}")
       echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
       total_bytes=$((total_bytes + size_bytes))
-      mac_ops_log_debug "Homebrew 캐시: ${formatted_size}"
+      mac_ops_log_debug "Homebrew cache: ${formatted_size}"
     else
       echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
     fi
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: 미설치"
+    echo "$(mac_ops_color_blue '●') ${category_name}: Not installed"
   fi
 
-  # 5. npm 캐시
-  category_name="npm 캐시"
+  # 5. npm cache
+  category_name="npm Cache"
   target_path="${HOME}/.npm/_cacache"
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
     echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
-    mac_ops_log_debug "npm 캐시: ${formatted_size}"
+    mac_ops_log_debug "npm cache: ${formatted_size}"
   else
     echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
-  # 6. yarn 캐시
-  category_name="Yarn 캐시"
+  # 6. yarn cache
+  category_name="Yarn Cache"
   target_path="${HOME}/.yarn/cache"
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
     echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
-    mac_ops_log_debug "Yarn 캐시: ${formatted_size}"
+    mac_ops_log_debug "Yarn cache: ${formatted_size}"
   else
     echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
-  # 7. pnpm 캐시
+  # 7. pnpm cache
   category_name="pnpm Store"
   target_path="${HOME}/.pnpm-store"
   if [[ -d "${target_path}" ]]; then
@@ -155,78 +155,69 @@ mac_ops_analyze() {
     echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
-  # 8. pip 캐시
-  category_name="pip 캐시"
+  # 8. pip cache
+  category_name="pip Cache"
   target_path="${HOME}/.cache/pip"
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
     echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
-    mac_ops_log_debug "pip 캐시: ${formatted_size}"
+    mac_ops_log_debug "pip cache: ${formatted_size}"
   else
     echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
-  # 9. Gradle 캐시
-  category_name="Gradle 캐시"
+  # 9. Gradle cache
+  category_name="Gradle Cache"
   target_path="${HOME}/.gradle/caches"
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
     echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
-    mac_ops_log_debug "Gradle 캐시: ${formatted_size}"
+    mac_ops_log_debug "Gradle cache: ${formatted_size}"
   else
     echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
-  # 10. /tmp (현재 사용자 파일만)
-  category_name="임시 파일 (/tmp)"
+  # 10. /tmp (current user files only)
+  category_name="Temporary Files (/tmp)"
   target_path="/tmp"
   if [[ -d "${target_path}" ]]; then
-    # 현재 사용자 소유 파일만 계산
+    # Calculate only current user's files
     user_tmp_size=0
-    for item in "${target_path}"/*(/N) "${target_path}"/*(-.N); do
-      if [[ -e "${item}" ]]; then
-        owner=$(stat -f%Su "${item}" 2>/dev/null)
-        if [[ "${owner}" == "${current_user}" ]]; then
-          item_size=$(mac_ops_get_dir_size "${item}")
-          user_tmp_size=$((user_tmp_size + item_size))
-        fi
-      fi
-    done
+    while IFS= read -r item; do
+      item_size=$(mac_ops_get_dir_size "${item}")
+      user_tmp_size=$((user_tmp_size + item_size))
+    done < <(find "${target_path}" -maxdepth 1 -user "${current_user}" 2>/dev/null)
     formatted_size=$(mac_ops_format_bytes "${user_tmp_size}")
     echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + user_tmp_size))
-    mac_ops_log_debug "임시 파일: ${formatted_size}"
+    mac_ops_log_debug "Temporary files: ${formatted_size}"
   else
     echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
-  # 11. /private/var/folders (현재 사용자 파일만)
-  category_name="시스템 임시 폴더"
+  # 11. /private/var/folders (current user files only)
+  category_name="System Temp Folders"
   target_path="/private/var/folders"
   if [[ -d "${target_path}" ]]; then
     user_var_size=0
-    # var/folders는 깊은 구조이므로 find 사용
     while IFS= read -r item; do
-      owner=$(stat -f%Su "${item}" 2>/dev/null)
-      if [[ "${owner}" == "${current_user}" ]]; then
-        item_size=$(mac_ops_get_dir_size "${item}")
-        user_var_size=$((user_var_size + item_size))
-      fi
-    done < <(find "${target_path}" -maxdepth 3 -type d 2>/dev/null)
+      item_size=$(mac_ops_get_dir_size "${item}")
+      user_var_size=$((user_var_size + item_size))
+    done < <(find "${target_path}" -maxdepth 3 -type d -user "${current_user}" 2>/dev/null)
     formatted_size=$(mac_ops_format_bytes "${user_var_size}")
     echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + user_var_size))
-    mac_ops_log_debug "시스템 임시 폴더: ${formatted_size}"
+    mac_ops_log_debug "System temp folders: ${formatted_size}"
   else
     echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
-  # 12. 브라우저 캐시
-  echo "$(mac_ops_color_blue '●') 브라우저 캐시:"
+  # 12. Browser cache
+  echo "$(mac_ops_color_blue '●') Browser Cache:"
 
   # Safari
   category_name="  Safari"
@@ -236,7 +227,7 @@ mac_ops_analyze() {
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
     echo "  $(mac_ops_color_green '└─') Safari: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
-    mac_ops_log_debug "Safari 캐시: ${formatted_size}"
+    mac_ops_log_debug "Safari cache: ${formatted_size}"
   else
     echo "  $(mac_ops_color_green '└─') Safari: N/A"
   fi
@@ -248,9 +239,9 @@ mac_ops_analyze() {
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
     echo "  $(mac_ops_color_green '└─') Chrome: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
-    mac_ops_log_debug "Chrome 캐시: ${formatted_size}"
+    mac_ops_log_debug "Chrome cache: ${formatted_size}"
   else
-    echo "  $(mac_ops_color_green '└─') Chrome: 미설치"
+    echo "  $(mac_ops_color_green '└─') Chrome: Not installed"
   fi
 
   # Firefox
@@ -260,9 +251,9 @@ mac_ops_analyze() {
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
     echo "  $(mac_ops_color_green '└─') Firefox: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
-    mac_ops_log_debug "Firefox 캐시: ${formatted_size}"
+    mac_ops_log_debug "Firefox cache: ${formatted_size}"
   else
-    echo "  $(mac_ops_color_green '└─') Firefox: 미설치"
+    echo "  $(mac_ops_color_green '└─') Firefox: Not installed"
   fi
 
   # 13. Docker
@@ -272,36 +263,36 @@ mac_ops_analyze() {
     if [[ -n "${docker_size}" ]]; then
       echo "$(mac_ops_color_blue '●') ${category_name}: ${docker_size}"
       mac_ops_log_debug "Docker: ${docker_size}"
-      # Docker 크기는 total_bytes에 포함하지 않음 (별도 관리)
+      # Docker size is not included in total_bytes (managed separately)
     else
       echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
     fi
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: 미설치 또는 미실행"
+    echo "$(mac_ops_color_blue '●') ${category_name}: Not installed or not running"
   fi
 
-  # 14. mac-ops 휴지통
-  category_name="mac-ops 휴지통"
+  # 14. mac-ops trash
+  category_name="mac-ops Trash"
   target_path="${HOME}/.mac-ops/.trash"
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
     echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
-    mac_ops_log_debug "mac-ops 휴지통: ${formatted_size}"
+    mac_ops_log_debug "mac-ops trash: ${formatted_size}"
   else
     echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
-  # 총 합계
+  # Total summary
   echo ""
   echo "$(mac_ops_color_bold '==========================================')"
   formatted_size=$(mac_ops_format_bytes "${total_bytes}")
-  echo "$(mac_ops_color_bold "총 절약 가능 공간: $(mac_ops_color_green "${formatted_size}")")"
+  echo "$(mac_ops_color_bold "Total Reclaimable Space: $(mac_ops_color_green "${formatted_size}")")"
   echo "$(mac_ops_color_bold '==========================================')"
   echo ""
 
-  mac_ops_log_info "디스크 공간 분석 완료: 총 ${formatted_size}"
+  mac_ops_log_info "Disk space analysis completed: Total ${formatted_size}"
 
   return 0
 }
