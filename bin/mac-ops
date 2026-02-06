@@ -23,6 +23,7 @@ source "${MAC_OPS_ROOT}/lib/utils/plist-helper.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/format.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/parallel.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/notify.zsh"
+source "${MAC_OPS_ROOT}/lib/utils/snapshot.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/cache-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/tmp-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/log-cleanup.zsh"
@@ -122,7 +123,11 @@ _mac_ops_cmd_run() {
   # 6. Emergency purge on disk danger
   mac_ops_emergency_purge || true
 
-  # 7. Initialize global counters
+  # 7. Take before snapshot
+  local snapshot_before
+  snapshot_before=$(mac_ops_take_snapshot)
+
+  # 8. Initialize global counters
   MAC_OPS_CLEANED_COUNT=0
   MAC_OPS_CLEANED_BYTES=0
   MAC_OPS_KILLED_COUNT=0
@@ -132,7 +137,7 @@ _mac_ops_cmd_run() {
   local mod_count=0 mod_bytes=0
   mkdir -p "${stats_dir}" 2>/dev/null
 
-  # 8. Module execution
+  # 9. Module execution
   if [[ -n "${target_module}" ]]; then
     # Run only specified module when --module is given
     if [[ -z "${MAC_OPS_MODULE_MAP[${target_module}]+_}" ]]; then
@@ -198,11 +203,18 @@ _mac_ops_cmd_run() {
   # 10. Release lock
   mac_ops_release_lock
 
-  # 11. Result summary
-  mac_ops_print_summary "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}"
+  # 11. Take after snapshot
+  local snapshot_after
+  snapshot_after=$(mac_ops_take_snapshot)
 
-  # 12. macOS notification (scheduled mode)
-  mac_ops_notify_completion "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}"
+  # 12. System report (before/after comparison + cleanup summary)
+  mac_ops_print_report "${snapshot_before}" "${snapshot_after}" "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}"
+
+  # 13. macOS notification (scheduled mode)
+  local before_disk_pct after_disk_pct
+  before_disk_pct="${snapshot_before%% *}"
+  after_disk_pct="${snapshot_after%% *}"
+  mac_ops_notify_completion "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}" "${before_disk_pct}" "${after_disk_pct}"
 }
 
 # =============================================================================
