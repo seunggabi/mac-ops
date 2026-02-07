@@ -155,6 +155,28 @@ Add the following content:
 
 ## Cautions
 
+### Danger Process
+
+> **WARNING**: The following commands are irreversible. Data cannot be recovered once executed.
+
+```bash
+# 1. Force cleanup - bypasses size guard (2GB limit), skips all safety prompts
+mac-ops run --force
+
+# 2. Permanently delete all trash - bypasses 72-hour grace period
+sudo rm -rf ~/.mac-ops/.trash
+```
+
+| Command | Risk | What It Does |
+|---------|------|--------------|
+| `run --force` | **HIGH** | Skips size guard, forces cleanup of all targets including large files (>2GB) |
+| `sudo rm -rf ~/.mac-ops/.trash` | **CRITICAL** | Permanently deletes all recoverable files, bypassing the 72-hour safety net |
+
+**Before running these commands:**
+1. Run `bin/mac-ops list-trash` to check what is in the trash
+2. Run `bin/mac-ops run --dry-run` to preview cleanup targets
+3. Restore any important files with `bin/mac-ops restore <path>`
+
 ### Full Disk Access Permission Required
 
 Due to macOS TCC policy, **Full Disk Access** permission is required to access certain paths like `~/Library/Caches`, `~/Library/Logs`.
