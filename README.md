@@ -1,56 +1,106 @@
-[![GitHub stars](https://img.shields.io/github/stars/seunggabi/mac-ops?style=flat&color=yellow)](https://github.com/seunggabi/mac-ops/stargazers)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/github/v/release/seunggabi/mac-ops?color=blue)](https://github.com/seunggabi/mac-ops/releases)
-[![macOS](https://img.shields.io/badge/macOS-13%2B-black?logo=apple)](https://github.com/seunggabi/mac-ops)
-[![Open Source Love](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-red)](https://github.com/seunggabi/mac-ops)
-[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/seunggabi/mac-ops)
-
 # mac-ops
 
-> A safe, zero-dependency macOS system optimizer with a 72-hour safety net.
+**Safe, zero-dependency macOS system optimizer with 72-hour recovery.**
 
-macOS system optimization CLI tool. Automatically cleans up unnecessary caches, temporary files, and zombie/orphan processes.
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![GitHub Stars](https://img.shields.io/github/stars/seunggabi/mac-ops?style=social)](https://github.com/seunggabi/mac-ops/stargazers)
+[![macOS](https://img.shields.io/badge/macOS-13%2B-black?logo=apple)](https://github.com/seunggabi/mac-ops)
+[![Latest Release](https://img.shields.io/github/v/release/seunggabi/mac-ops?color=blue)](https://github.com/seunggabi/mac-ops/releases)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/seunggabi/mac-ops)
+[![Tests](https://img.shields.io/badge/tests-108%2B%20passed-brightgreen)](https://github.com/seunggabi/mac-ops)
+
+---
+
+## Demo
+
+<!-- Record with: cd mac-ops && vhs demo/demo.tape -->
+
+<p align="center"><img src="demo/demo.gif" alt="mac-ops demo" width="720"></p>
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/seunggabi/mac-ops.git
-cd mac-ops
+# Install via Homebrew
+brew tap seunggabi/mac-ops && brew install mac-ops
+```
+
+Or clone from source:
+
+```bash
+git clone https://github.com/seunggabi/mac-ops.git && cd mac-ops && chmod +x bin/mac-ops
+```
+
+First run:
+
+```bash
 bin/mac-ops run --dry-run   # Preview what will be cleaned
-bin/mac-ops analyze          # See disk space report
+bin/mac-ops analyze          # Disk space report
+bin/mac-ops run              # Execute cleanup
 ```
 
-## Key Features
+## Why mac-ops
 
-- **72-hour safety net**: Files are moved to trash instead of immediate deletion. Recoverable if mistakes happen
-- **Zero external dependencies**: Uses only macOS built-in tools (zsh, plutil, launchd)
-- **5-layer safety system**: Whitelist, blacklist, size guard, process protection, lock
-- **10 cleanup modules**: Cache, tmp files, logs, zombie/orphan processes, Homebrew, dev tools, Docker, browser
-- **108+ test suite**: Thoroughly tested (18 trash + 24 safety + 22 modules + 44 E2E + 6 timeout)
+### 72-Hour Safety Net
 
-## Installation
-
-### From Source
+Every file mac-ops cleans is moved to `~/.mac-ops/.trash/` instead of being permanently deleted. You have **72 hours** to restore anything with a single command. No other CLI cleanup tool offers this level of protection.
 
 ```bash
-git clone https://github.com/seunggabi/mac-ops.git
-cd mac-ops
-chmod +x bin/mac-ops
+bin/mac-ops restore ~/Library/Caches/com.important.app   # Undo a mistake instantly
 ```
 
-### Homebrew ([homebrew-mac-ops](https://github.com/seunggabi/homebrew-mac-ops))
+### Zero Dependencies
+
+Pure zsh. No Python, no Ruby, no Node.js. Only macOS built-in tools (`zsh`, `plutil`, `launchd`). Install and run anywhere with no setup overhead.
+
+### 5-Layer Safety System
+
+| Layer | Protection |
+|-------|-----------|
+| Whitelist | Only touches known-safe cleanup targets |
+| Blacklist | System paths, keychains, and user documents are never touched |
+| Size Guard | Files over 2 GB are automatically skipped |
+| Process Protection | Critical system processes (`kernel_task`, `WindowServer`, `launchd`, ...) are never killed |
+| Lock | Prevents concurrent execution to avoid race conditions |
+
+### 10 Cleanup Modules
+
+| Module | Description |
+|--------|-------------|
+| `cache` | Clean `~/Library/Caches` (Apple system caches excluded) |
+| `tmp` | Clean `/tmp`, `/private/var/folders`, CrashReporter |
+| `log` | Clean `~/Library/Logs`, system diagnostic reports |
+| `zombie` | Detect and terminate zombie processes |
+| `orphan` | Detect and terminate orphan processes |
+| `orphan-app` | Clean residual files from deleted applications |
+| `brew` | Clean Homebrew caches and outdated downloads |
+| `dev` | Clean Xcode, npm, yarn, pnpm, pip, Gradle caches |
+| `docker` | Clean dangling images, stopped containers, unused volumes |
+| `browser` | Clean Safari, Chrome, Firefox caches |
+
+### Parallel Execution
+
+File-based modules run concurrently to minimize cleanup time. Process modules execute sequentially for safety.
+
+### Scheduled Automation
+
+Native `launchd` integration runs cleanup every hour, catching up on missed runs after sleep/wake. One command to install:
 
 ```bash
-brew tap seunggabi/mac-ops
-brew install mac-ops
+bin/mac-ops install
 ```
 
-### Add to PATH (Optional)
+## Comparison
 
-```bash
-# Add to ~/.zshrc
-export PATH="/path/to/mac-ops/bin:$PATH"
-```
+| Feature | mac-ops | CleanMyMac | OnyX | Manual `rm` |
+|---------|:-------:|:----------:|:----:|:-----------:|
+| Price | Free | $39.95/yr | Free | Free |
+| Safe deletion (72h recovery) | ✅ | ⚠️ | ❌ | ❌ |
+| CLI support | ✅ | ❌ | ❌ | ✅ |
+| Automation (launchd/cron) | ✅ | ❌ | ❌ | Manual |
+| Open source | ✅ | ❌ | ❌ | N/A |
+| Zero dependencies | ✅ | ❌ | ❌ | N/A |
+| Process cleanup | ✅ | ❌ | ❌ | Manual |
+| Disk analysis | ✅ | ✅ | ✅ | Manual |
 
 ## Usage
 
@@ -74,21 +124,6 @@ bin/mac-ops analyze
 # Verbose logging
 bin/mac-ops run --verbose
 ```
-
-### Available Modules
-
-| Module | Description |
-|--------|-------------|
-| `cache` | Clean ~/Library/Caches (except Apple) |
-| `tmp` | Clean /tmp, /private/var/folders, CrashReporter |
-| `log` | Clean ~/Library/Logs, system diagnostic reports |
-| `zombie` | Detect and clean zombie processes |
-| `orphan` | Detect and clean orphan processes |
-| `orphan-app` | Clean residual files from deleted apps |
-| `brew` | Clean Homebrew caches |
-| `dev` | Clean Xcode, npm, yarn, pnpm, pip, Gradle caches |
-| `docker` | Clean Docker dangling images, stopped containers, unused volumes |
-| `browser` | Clean Safari, Chrome, Firefox caches |
 
 ### Trash Management
 
@@ -279,4 +314,6 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for gu
 
 ## License
 
-MIT
+[MIT](LICENSE)
+
+<!-- GitHub Topics: macos, cli, cleanup, disk-space, system-optimization, shell, productivity, macos-utility, zsh -->
