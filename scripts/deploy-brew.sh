@@ -1,6 +1,6 @@
 #!/bin/zsh
 # =============================================================================
-# deploy-brew.sh: Deploy latest mac-ops tag to homebrew-mac-ops tap
+# deploy-brew.sh: Deploy latest mac-ops tag to homebrew-tap
 # Usage: ./scripts/deploy-brew.sh
 # =============================================================================
 
@@ -8,14 +8,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MAC_OPS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-HOMEBREW_REPO="${MAC_OPS_ROOT}/../homebrew-mac-ops"
+HOMEBREW_REPO="${MAC_OPS_ROOT}/../homebrew-tap"
 FORMULA_PATH="${HOMEBREW_REPO}/Formula/mac-ops.rb"
 REPO_URL="https://github.com/seunggabi/mac-ops"
 
-# --- Validate homebrew-mac-ops repo exists ---
+# --- Validate homebrew-tap repo exists ---
 if [[ ! -d "${HOMEBREW_REPO}/.git" ]]; then
-  echo "[ERROR] homebrew-mac-ops repo not found at: ${HOMEBREW_REPO}"
-  echo "  git clone https://github.com/seunggabi/homebrew-mac-ops.git ${HOMEBREW_REPO}"
+  echo "[ERROR] homebrew-tap repo not found at: ${HOMEBREW_REPO}"
+  echo "  git clone https://github.com/seunggabi/homebrew-tap.git ${HOMEBREW_REPO}"
   exit 1
 fi
 
@@ -68,4 +68,4 @@ git add Formula/mac-ops.rb
 git commit -m "chore: bump formula to ${LATEST_TAG}"
 git push origin main
 
-echo "[DONE] homebrew-mac-ops updated to ${LATEST_TAG}"
+echo "[DONE] homebrew-tap updated to ${LATEST_TAG}"

@@ -21,7 +21,7 @@
 
 ```bash
 # Install via Homebrew
-brew tap seunggabi/mac-ops && brew install mac-ops
+brew install seunggabi/tap/mac-ops
 ```
 
 Or clone from source:
