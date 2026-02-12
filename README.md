@@ -154,6 +154,36 @@ bin/mac-ops version
 bin/mac-ops help
 ```
 
+## Configuration
+
+### Environment Variables
+
+You can customize cleanup behavior by setting environment variables:
+
+```bash
+# Cache cleanup settings
+export MAC_OPS_CACHE_MAX_AGE_DAYS=7    # Delete caches older than N days (default: 7)
+export MAC_OPS_CACHE_RECENT_DAYS=3     # Protect caches used within N days (default: 3)
+
+# Example: More aggressive cache cleanup
+MAC_OPS_CACHE_MAX_AGE_DAYS=30 bin/mac-ops run --module=cache
+
+# Example: Protect only very recent caches
+MAC_OPS_CACHE_RECENT_DAYS=1 bin/mac-ops run --module=cache
+```
+
+### Cache Protection Policy
+
+The cache cleanup module now includes **smart protection** to prevent accidental deletion of active application data:
+
+1. ✅ **Apple system caches** (`com.apple.*`) - Always protected
+2. ✅ **Installed applications** - Caches from apps in `/Applications` are protected
+3. ✅ **Running applications** - Caches from currently running apps are protected
+4. ✅ **Recently used caches** - Caches accessed within `MAC_OPS_CACHE_RECENT_DAYS` (default: 3 days) are protected
+5. ✅ **Orphan caches only** - Only caches from uninstalled/inactive apps older than `MAC_OPS_CACHE_MAX_AGE_DAYS` (default: 7 days) are cleaned
+
+This ensures your login sessions, preferences, and active app data are never touched during cleanup.
+
 ## Scheduled Execution
 
 ### Method 1: launchd (Recommended)

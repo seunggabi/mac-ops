@@ -6,6 +6,7 @@
 
 # --- Default settings ---
 MAC_OPS_CACHE_MAX_AGE_DAYS=${MAC_OPS_CACHE_MAX_AGE_DAYS:-7}
+MAC_OPS_CACHE_RECENT_DAYS=${MAC_OPS_CACHE_RECENT_DAYS:-3}  # Protect caches used within N days
 
 # -----------------------------------------------------------------------------
 # Cache cleanup main function
@@ -14,13 +15,34 @@ MAC_OPS_CACHE_MAX_AGE_DAYS=${MAC_OPS_CACHE_MAX_AGE_DAYS:-7}
 mac_ops_cache_cleanup() {
   local cache_dir="${HOME}/Library/Caches"
   local max_age_days="${MAC_OPS_CACHE_MAX_AGE_DAYS}"
+  local recent_days="${MAC_OPS_CACHE_RECENT_DAYS}"
   local now_epoch
   now_epoch=$(date +%s)
   local threshold_seconds=$((max_age_days * 86400))
+  local recent_threshold_seconds=$((recent_days * 86400))
   local bundle_name="" newest_mtime="" age_seconds=0 dir_size=0 file_count=0
   local old_count=0 file_basename="" mtime="" file_size=0
 
-  mac_ops_log_info "Cache cleanup started: ${cache_dir} (threshold: ${max_age_days} days or older)"
+  mac_ops_log_info "Cache cleanup started: ${cache_dir} (delete: >${max_age_days}d, protect recent: <${recent_days}d)"
+
+  # Collect installed app bundle IDs (from /Applications and ~/Applications)
+  local installed_bundles
+  installed_bundles=$(
+    {
+      find /Applications ~/Applications -maxdepth 3 -name "*.app" 2>/dev/null | while IFS= read -r app_path; do
+        defaults read "${app_path}/Contents/Info.plist" CFBundleIdentifier 2>/dev/null
+      done
+    } | sort -u
+  )
+
+  # Collect running app bundle IDs
+  local running_bundles
+  running_bundles=$(
+    lsappinfo list 2>/dev/null | grep 'bundleID=' | sed 's/.*bundleID="\([^"]*\)".*/\1/' | grep -v '^\[' | sort -u
+  )
+
+  mac_ops_log_debug "Installed apps: $(echo "${installed_bundles}" | wc -l | tr -d ' ') bundles"
+  mac_ops_log_debug "Running apps: $(echo "${running_bundles}" | wc -l | tr -d ' ') bundles"
 
   # Check if cache directory exists
   if [[ ! -d "${cache_dir}" ]]; then
@@ -44,6 +66,18 @@ mac_ops_cache_cleanup() {
       continue
     fi
 
+    # Skip if app is currently installed
+    if echo "${installed_bundles}" | grep -qx "${bundle_name}"; then
+      mac_ops_log_debug "Installed app cache protected: ${bundle_name}"
+      continue
+    fi
+
+    # Skip if app is currently running
+    if echo "${running_bundles}" | grep -qx "${bundle_name}"; then
+      mac_ops_log_debug "Running app cache protected: ${bundle_name}"
+      continue
+    fi
+
     # Check latest modification time and file count for entire bundle directory (with find at once)
     local find_result
     find_result=$(find "${bundle_dir}" -type f -exec stat -f%m {} + 2>/dev/null | awk 'BEGIN{max=0;n=0}{n++;if($1>max)max=$1}END{print max,n}')
@@ -55,6 +89,12 @@ mac_ops_cache_cleanup() {
     fi
 
     age_seconds=$((now_epoch - newest_mtime))
+
+    # Skip if cache was recently used (within recent_days)
+    if [[ ${age_seconds} -lt ${recent_threshold_seconds} ]]; then
+      mac_ops_log_debug "Recently used cache protected: ${bundle_name} (used within ${recent_days} days)"
+      continue
+    fi
 
     if [[ ${age_seconds} -ge ${threshold_seconds} ]]; then
       dir_size=$(mac_ops_get_dir_size "${bundle_dir}")
