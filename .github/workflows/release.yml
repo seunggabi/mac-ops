@@ -8,6 +8,8 @@ on:
 jobs:
   deploy-homebrew:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Get tag version
         id: tag
