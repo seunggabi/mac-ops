@@ -28,11 +28,39 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
+      - name: Download and patch tarball
+        run: |
+          VERSION="${{ steps.tag.outputs.version }}"
+          VERSION_NUM="${VERSION#v}"
+
+          # Download original tarball
+          curl -sL "${{ steps.sha.outputs.tarball_url }}" -o original.tar.gz
+
+          # Extract, add VERSION file, and repack
+          mkdir -p temp
+          tar -xzf original.tar.gz -C temp
+          echo "$VERSION_NUM" > "temp/mac-ops-${VERSION_NUM}/VERSION"
+          cd temp
+          tar -czf ../patched.tar.gz "mac-ops-${VERSION_NUM}"
+          cd ..
+
+          # Calculate new sha256
+          NEW_SHA256=$(shasum -a 256 patched.tar.gz | awk '{print $1}')
+          echo "new_sha256=$NEW_SHA256" >> "$GITHUB_OUTPUT"
+
+          # Upload patched tarball as release asset
+          gh release upload "$VERSION" patched.tar.gz --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        id: patch
+
       - name: Update formula
         run: |
           cd homebrew-tap
-          sed -i 's|url ".*"|url "${{ steps.sha.outputs.tarball_url }}"|' Formula/mac-ops.rb
-          sed -i 's|sha256 ".*"|sha256 "${{ steps.sha.outputs.sha256 }}"|' Formula/mac-ops.rb
+          # Use patched tarball URL
+          PATCHED_URL="https://github.com/seunggabi/mac-ops/releases/download/${{ steps.tag.outputs.version }}/patched.tar.gz"
+          sed -i "s|url \".*\"|url \"$PATCHED_URL\"|" Formula/mac-ops.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${{ steps.patch.outputs.new_sha256 }}\"|" Formula/mac-ops.rb
           cat Formula/mac-ops.rb
 
       - name: Commit and push
