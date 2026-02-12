@@ -162,8 +162,8 @@ You can customize cleanup behavior by setting environment variables:
 
 ```bash
 # Cache cleanup settings
-export MAC_OPS_CACHE_MAX_AGE_DAYS=7    # Delete caches older than N days (default: 7)
-export MAC_OPS_CACHE_RECENT_DAYS=3     # Protect caches used within N days (default: 3)
+export MAC_OPS_CACHE_MAX_AGE_DAYS=30   # Delete caches older than N days (default: 30)
+export MAC_OPS_CACHE_RECENT_DAYS=7     # Protect caches used within N days (default: 7)
 
 # Example: More aggressive cache cleanup
 MAC_OPS_CACHE_MAX_AGE_DAYS=30 bin/mac-ops run --module=cache

@@ -5,8 +5,8 @@
 # =============================================================================
 
 # --- Default settings ---
-MAC_OPS_CACHE_MAX_AGE_DAYS=${MAC_OPS_CACHE_MAX_AGE_DAYS:-7}
-MAC_OPS_CACHE_RECENT_DAYS=${MAC_OPS_CACHE_RECENT_DAYS:-3}  # Protect caches used within N days
+MAC_OPS_CACHE_MAX_AGE_DAYS=${MAC_OPS_CACHE_MAX_AGE_DAYS:-30}
+MAC_OPS_CACHE_RECENT_DAYS=${MAC_OPS_CACHE_RECENT_DAYS:-7}  # Protect caches used within N days
 
 # -----------------------------------------------------------------------------
 # Cache cleanup main function
