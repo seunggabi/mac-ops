@@ -21,6 +21,9 @@ jobs:
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "tarball_url=$TARBALL_URL" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+
       - name: Update homebrew-tap formula
         uses: actions/checkout@v4
         with:
