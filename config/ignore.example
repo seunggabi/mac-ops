@@ -1,0 +1,39 @@
+# mac-ops ignore file
+# Copy this file to ~/.mac-ops/ignore and customize as needed.
+#
+# Lines starting with # are comments. Empty lines are ignored.
+#
+# Sections:
+#   [bundle]   Bundle ID patterns → skipped by orphan-app-cleanup
+#   [process]  Process name patterns → skipped by zombie-killer, orphan-killer
+#   [path]     Path patterns → skipped by all file-based cleanups
+#
+# Pattern syntax:
+#   Exact match:      com.mycompany.MyApp
+#   Prefix wildcard:  com.mycompany.*
+#   Glob wildcard:    MyHelper*
+#   Path with glob:   ~/work/project/**
+
+# ---------------------------------------------------------------------------
+[bundle]
+# My company's apps
+# com.mycompany.*
+
+# A specific app not in /Applications (e.g., sideloaded build)
+# com.example.DevBuild
+
+# ---------------------------------------------------------------------------
+[process]
+# A background daemon you manage manually
+# my-custom-daemon
+
+# All helper processes from a specific vendor
+# MyVendorHelper*
+
+# ---------------------------------------------------------------------------
+[path]
+# A custom cache directory that mac-ops should never touch
+# ~/work/.cache
+
+# A project with large node_modules you manage yourself
+# ~/projects/my-project

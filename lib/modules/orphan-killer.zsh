@@ -99,6 +99,12 @@ mac_ops_orphan_killer() {
       continue
     fi
 
+    # User ignore rules: process name pattern
+    if mac_ops_ignore_check_process "${proc_name}"; then
+      mac_ops_log_debug "User ignore (process): ${proc_name} (PID: ${pid})"
+      continue
+    fi
+
     # Check if registered in launchctl
     # Skip if process name is included in service label
     is_registered=false

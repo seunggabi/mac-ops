@@ -18,6 +18,7 @@ source "${MAC_OPS_ROOT}/lib/core/logger.zsh"
 source "${MAC_OPS_ROOT}/lib/core/lock.zsh"
 source "${MAC_OPS_ROOT}/lib/core/trash.zsh"
 source "${MAC_OPS_ROOT}/lib/core/safety.zsh"
+source "${MAC_OPS_ROOT}/lib/core/ignore.zsh"
 source "${MAC_OPS_ROOT}/lib/core/disk.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/plist-helper.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/format.zsh"
@@ -35,6 +36,7 @@ source "${MAC_OPS_ROOT}/lib/modules/dev-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/docker-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/browser-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/analyze.zsh"
+source "${MAC_OPS_ROOT}/lib/modules/monitor.zsh"
 
 # --- Version (from git tag or VERSION file) ---
 if [[ -d "${MAC_OPS_ROOT}/.git" ]]; then
@@ -76,6 +78,10 @@ Usage:
 Commands:
   run              Run cleanup (default command)
   analyze          Disk space analysis report
+  monitor          Memory & CPU usage dashboard (7-day history)
+  monitor top [N]  Show top N processes by memory (default: 10)
+  monitor kill [M] Kill processes using more than M MB (default: 500)
+  monitor collect  Record a snapshot (use for scheduled collection)
   status           Show trash status and disk usage
   restore <path>   Restore from trash to original location
   list-trash       List trash contents
@@ -146,7 +152,10 @@ _mac_ops_cmd_run() {
   local mod_count=0 mod_bytes=0
   mkdir -p "${stats_dir}" 2>/dev/null
 
-  # 9. Module execution
+  # 9. Load user ignore rules (before any module runs)
+  mac_ops_ignore_load
+
+  # 10. Module execution
   if [[ -n "${target_module}" ]]; then
     # Run only specified module when --module is given
     if [[ -z "${MAC_OPS_MODULE_MAP[${target_module}]+_}" ]]; then
@@ -367,6 +376,37 @@ _mac_ops_cmd_analyze() {
 }
 
 # =============================================================================
+# monitor command
+# =============================================================================
+_mac_ops_cmd_monitor() {
+  mac_ops_init_dirs
+  mac_ops_load_config
+
+  local subcmd="${1:-show}"
+  shift 2>/dev/null || true
+
+  case "${subcmd}" in
+    show|--hours|-h)
+      mac_ops_monitor_show "${subcmd}"
+      ;;
+    top)
+      mac_ops_monitor_top "${1:-10}"
+      ;;
+    kill)
+      mac_ops_monitor_kill "${1:-${MAC_OPS_MONITOR_KILL_THRESHOLD_MB:-500}}"
+      ;;
+    collect)
+      mac_ops_monitor_collect
+      mac_ops_log_info "Monitor snapshot collected"
+      ;;
+    *)
+      # treat unknown subcommand as flag to show (e.g., --hours passed first)
+      mac_ops_monitor_show "${subcmd}"
+      ;;
+  esac
+}
+
+# =============================================================================
 # config command
 # =============================================================================
 _mac_ops_cmd_config() {
@@ -401,6 +441,7 @@ _mac_ops_main() {
   local command="run"
   local module_name=""
   local restore_path=""
+  local -a monitor_subcmd=()
 
   # Parse arguments
   while [[ $# -gt 0 ]]; do
@@ -408,6 +449,13 @@ _mac_ops_main() {
       run|analyze|status|list-trash|purge|install|uninstall|config|help|version)
         command="${1}"
         shift
+        ;;
+      monitor)
+        command="monitor"
+        shift
+        # Capture remaining args as monitor subcommand (top/kill/collect/--hours)
+        monitor_subcmd=("$@")
+        set --  # clear positional params to end the while loop
         ;;
       restore)
         command="restore"
@@ -461,6 +509,9 @@ _mac_ops_main() {
       ;;
     analyze)
       _mac_ops_cmd_analyze
+      ;;
+    monitor)
+      _mac_ops_cmd_monitor "${monitor_subcmd[@]}"
       ;;
     status)
       _mac_ops_cmd_status
