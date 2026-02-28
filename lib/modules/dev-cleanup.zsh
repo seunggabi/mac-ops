@@ -3,6 +3,10 @@
 # Integrated cleanup for Xcode, npm, yarn, pnpm, pip, gradle, CocoaPods, etc.
 # =============================================================================
 
+# --- Default settings ---
+# Only delete cache items older than this many days (prevents wiping active caches)
+MAC_OPS_DEV_CACHE_MAX_AGE_DAYS=${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS:-30}
+
 # -----------------------------------------------------------------------------
 # Xcode cache cleanup
 # DerivedData, Archives, CoreSimulator cache
@@ -140,14 +144,29 @@ _mac_ops_dev_npm() {
 
   mac_ops_log_info "Cleaning npm cache..."
 
+  local _dev_now _dev_max_age_s _dev_cleaned=0
+  _dev_now=$(date +%s)
+  _dev_max_age_s=$((MAC_OPS_DEV_CACHE_MAX_AGE_DAYS * 86400))
+
   for item in "${npm_cache}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "npm cache cleanup" "dev-cleanup"
+    local _dev_mtime _dev_sz
+    _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
+    if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
+      mac_ops_log_debug "Skipping recent npm cache: $(basename ${item})"
+      continue
+    fi
+    _dev_sz=$(mac_ops_get_dir_size "${item}")
+    if mac_ops_trash_move "${item}" "npm cache cleanup" "dev-cleanup"; then
+      _dev_cleaned=$((_dev_cleaned + _dev_sz))
+    fi
   done
 
-  MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
-  MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "npm cache cleanup completed: $(mac_ops_format_bytes ${cache_size})"
+  if [[ ${_dev_cleaned} -gt 0 ]]; then
+    MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
+    MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
+    mac_ops_log_info "npm cache cleanup completed: $(mac_ops_format_bytes ${_dev_cleaned})"
+  fi
 
   return 0
 }
@@ -183,14 +202,29 @@ _mac_ops_dev_yarn() {
 
   mac_ops_log_info "Cleaning yarn cache..."
 
+  local _dev_now _dev_max_age_s _dev_cleaned=0
+  _dev_now=$(date +%s)
+  _dev_max_age_s=$((MAC_OPS_DEV_CACHE_MAX_AGE_DAYS * 86400))
+
   for item in "${yarn_cache}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "yarn cache cleanup" "dev-cleanup"
+    local _dev_mtime _dev_sz
+    _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
+    if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
+      mac_ops_log_debug "Skipping recent yarn cache: $(basename ${item})"
+      continue
+    fi
+    _dev_sz=$(mac_ops_get_dir_size "${item}")
+    if mac_ops_trash_move "${item}" "yarn cache cleanup" "dev-cleanup"; then
+      _dev_cleaned=$((_dev_cleaned + _dev_sz))
+    fi
   done
 
-  MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
-  MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "yarn cache cleanup completed: $(mac_ops_format_bytes ${cache_size})"
+  if [[ ${_dev_cleaned} -gt 0 ]]; then
+    MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
+    MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
+    mac_ops_log_info "yarn cache cleanup completed: $(mac_ops_format_bytes ${_dev_cleaned})"
+  fi
 
   return 0
 }
@@ -226,14 +260,29 @@ _mac_ops_dev_pnpm() {
 
   mac_ops_log_info "Cleaning pnpm store..."
 
+  local _dev_now _dev_max_age_s _dev_cleaned=0
+  _dev_now=$(date +%s)
+  _dev_max_age_s=$((MAC_OPS_DEV_CACHE_MAX_AGE_DAYS * 86400))
+
   for item in "${pnpm_store}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "pnpm store cleanup" "dev-cleanup"
+    local _dev_mtime _dev_sz
+    _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
+    if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
+      mac_ops_log_debug "Skipping recent pnpm store: $(basename ${item})"
+      continue
+    fi
+    _dev_sz=$(mac_ops_get_dir_size "${item}")
+    if mac_ops_trash_move "${item}" "pnpm store cleanup" "dev-cleanup"; then
+      _dev_cleaned=$((_dev_cleaned + _dev_sz))
+    fi
   done
 
-  MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + store_size))
-  MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "pnpm store cleanup completed: $(mac_ops_format_bytes ${store_size})"
+  if [[ ${_dev_cleaned} -gt 0 ]]; then
+    MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
+    MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
+    mac_ops_log_info "pnpm store cleanup completed: $(mac_ops_format_bytes ${_dev_cleaned})"
+  fi
 
   return 0
 }
@@ -269,14 +318,29 @@ _mac_ops_dev_pip() {
 
   mac_ops_log_info "Cleaning pip cache..."
 
+  local _dev_now _dev_max_age_s _dev_cleaned=0
+  _dev_now=$(date +%s)
+  _dev_max_age_s=$((MAC_OPS_DEV_CACHE_MAX_AGE_DAYS * 86400))
+
   for item in "${pip_cache}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "pip cache cleanup" "dev-cleanup"
+    local _dev_mtime _dev_sz
+    _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
+    if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
+      mac_ops_log_debug "Skipping recent pip cache: $(basename ${item})"
+      continue
+    fi
+    _dev_sz=$(mac_ops_get_dir_size "${item}")
+    if mac_ops_trash_move "${item}" "pip cache cleanup" "dev-cleanup"; then
+      _dev_cleaned=$((_dev_cleaned + _dev_sz))
+    fi
   done
 
-  MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
-  MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "pip cache cleanup completed: $(mac_ops_format_bytes ${cache_size})"
+  if [[ ${_dev_cleaned} -gt 0 ]]; then
+    MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
+    MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
+    mac_ops_log_info "pip cache cleanup completed: $(mac_ops_format_bytes ${_dev_cleaned})"
+  fi
 
   return 0
 }
@@ -312,14 +376,40 @@ _mac_ops_dev_gradle() {
 
   mac_ops_log_info "Cleaning gradle cache..."
 
+  local _dev_now _dev_max_age_s _dev_cleaned=0
+  _dev_now=$(date +%s)
+  _dev_max_age_s=$((MAC_OPS_DEV_CACHE_MAX_AGE_DAYS * 86400))
+
   for item in "${gradle_cache}"/*; do
     [[ ! -e "${item}" ]] && continue
-    mac_ops_trash_move "${item}" "gradle cache cleanup" "dev-cleanup"
+    local _dev_item_name
+    _dev_item_name=$(basename "${item}")
+
+    # Protect downloaded dependency artifacts (modules-*) from cleanup.
+    # These JARs are shared across all projects and expensive to re-download.
+    # Deleting them causes build failures in offline environments.
+    if [[ "${_dev_item_name}" == modules-* ]]; then
+      mac_ops_log_debug "Skipping gradle dependency artifacts: ${_dev_item_name}"
+      continue
+    fi
+
+    local _dev_mtime _dev_sz
+    _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
+    if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
+      mac_ops_log_debug "Skipping recent gradle cache: ${_dev_item_name}"
+      continue
+    fi
+    _dev_sz=$(mac_ops_get_dir_size "${item}")
+    if mac_ops_trash_move "${item}" "gradle cache cleanup" "dev-cleanup"; then
+      _dev_cleaned=$((_dev_cleaned + _dev_sz))
+    fi
   done
 
-  MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
-  MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "gradle cache cleanup completed: $(mac_ops_format_bytes ${cache_size})"
+  if [[ ${_dev_cleaned} -gt 0 ]]; then
+    MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
+    MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
+    mac_ops_log_info "gradle cache cleanup completed: $(mac_ops_format_bytes ${_dev_cleaned})"
+  fi
 
   return 0
 }

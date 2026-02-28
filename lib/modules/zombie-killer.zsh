@@ -61,6 +61,12 @@ mac_ops_zombie_killer() {
       continue
     fi
 
+    # User ignore rules: process name pattern
+    if mac_ops_ignore_check_process "${parent_name}"; then
+      mac_ops_log_debug "User ignore (process): ${parent_name} (PID: ${ppid})"
+      continue
+    fi
+
     mac_ops_log_info "Processing zombie PID ${zombie_pid} (parent: ${parent_name}, PPID: ${ppid})"
 
     # DRY_RUN mode

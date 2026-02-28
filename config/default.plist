@@ -50,7 +50,12 @@
 		<key>dev-cleanup</key>
 		<dict>
 			<key>Enabled</key>
-			<true/>
+			<false/>
+		</dict>
+		<key>browser-cleanup</key>
+		<dict>
+			<key>Enabled</key>
+			<false/>
 		</dict>
 		<key>docker-cleanup</key>
 		<dict>
