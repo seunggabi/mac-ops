@@ -16,9 +16,45 @@ typeset -gA _MAC_OPS_IDX_SIZE
 typeset -gA _MAC_OPS_IDX_EXPIRE
 typeset -ga _MAC_OPS_IDX_KEYS
 
+# Index mutex lock directory (mkdir is atomic — safe for parallel subshells)
+MAC_OPS_INDEX_LOCK_DIR="${MAC_OPS_TRASH_DIR}/.index.lock"
+
 # =============================================================================
 # JSON index helper functions
 # =============================================================================
+
+# -----------------------------------------------------------------------------
+# Acquire a mutex lock on the JSON index file (spin-wait, max ~3 seconds)
+# Usage: _mac_ops_index_lock
+# -----------------------------------------------------------------------------
+_mac_ops_index_lock() {
+  local retries=0
+  while ! mkdir "${MAC_OPS_INDEX_LOCK_DIR}" 2>/dev/null; do
+    retries=$((retries + 1))
+    if [[ ${retries} -gt 30 ]]; then
+      # Stale lock guard: if the lock directory is older than 60s, force-remove it
+      local lock_mtime
+      lock_mtime=$(stat -f%m "${MAC_OPS_INDEX_LOCK_DIR}" 2>/dev/null)
+      if [[ -n "${lock_mtime}" && $(( $(date +%s) - lock_mtime )) -gt 60 ]]; then
+        rmdir "${MAC_OPS_INDEX_LOCK_DIR}" 2>/dev/null || true
+        mac_ops_log_warn "Removed stale index lock (held > 60s)"
+        continue
+      fi
+      mac_ops_log_warn "Index lock timeout — proceeding without lock"
+      return 1
+    fi
+    sleep 0.1
+  done
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Release the mutex lock on the JSON index file
+# Usage: _mac_ops_index_unlock
+# -----------------------------------------------------------------------------
+_mac_ops_index_unlock() {
+  rmdir "${MAC_OPS_INDEX_LOCK_DIR}" 2>/dev/null || true
+}
 
 # -----------------------------------------------------------------------------
 # Escape a string for safe JSON embedding
@@ -206,6 +242,9 @@ mac_ops_index_add() {
   local size_bytes="${7}"
   local expire_after="${8}"
 
+  # Acquire mutex to prevent race condition during parallel module execution
+  _mac_ops_index_lock
+
   mac_ops_index_read
 
   _MAC_OPS_IDX_KEYS+=("${key}")
@@ -218,6 +257,8 @@ mac_ops_index_add() {
   _MAC_OPS_IDX_EXPIRE[${key}]="${expire_after}"
 
   mac_ops_index_write
+
+  _mac_ops_index_unlock
 }
 
 # -----------------------------------------------------------------------------
@@ -514,8 +555,8 @@ mac_ops_trash_expire() {
       trash_path="${_MAC_OPS_IDX_TRASH[${key}]}"
       size_bytes="${_MAC_OPS_IDX_SIZE[${key}]:-0}"
 
-      # Permanently delete trash file
-      if [[ -n "${trash_path}" && -e "${trash_path}" ]]; then
+      # Permanently delete trash file (guard: must be inside MAC_OPS_TRASH_DIR)
+      if [[ -n "${trash_path}" && "${trash_path}" == "${MAC_OPS_TRASH_DIR}/"* && -e "${trash_path}" ]]; then
         rm -rf "${trash_path}" 2>/dev/null
         freed_bytes=$((freed_bytes + size_bytes))
       fi

@@ -213,8 +213,8 @@ _mac_ops_cmd_run() {
     mac_ops_orphan_killer || true
   fi
 
-  # Cleanup statistics temporary directory
-  rm -rf "${stats_dir}" 2>/dev/null
+  # Cleanup statistics temporary directory (guard: must match expected path pattern)
+  [[ -n "${stats_dir}" && "${stats_dir}" == *"/stats_"* ]] && rm -rf "${stats_dir}" 2>/dev/null
 
   # 9. Delete expired files (72 hour threshold)
   mac_ops_trash_expire || true

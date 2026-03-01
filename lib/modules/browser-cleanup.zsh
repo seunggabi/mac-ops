@@ -40,6 +40,11 @@ _mac_ops_browser_safari() {
     item_size=$(mac_ops_get_dir_size "${cache_item}")
     mac_ops_log_info "Cleaning Safari cache item: ${item_basename} ($(mac_ops_format_bytes ${item_size}))"
 
+    if mac_ops_ignore_check_path "${cache_item}"; then
+      mac_ops_log_debug "User ignore (path): ${cache_item}"
+      continue
+    fi
+
     if mac_ops_trash_move "${cache_item}" "browser-cache" "safari"; then
       MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
       MAC_OPS_CLEANED_BYTES=$((${MAC_OPS_CLEANED_BYTES:-0} + item_size))
@@ -94,7 +99,12 @@ _mac_ops_browser_chrome() {
       item_size=$(mac_ops_get_dir_size "${cache_item}")
       mac_ops_log_info "Cleaning Chrome cache item: $(basename ${cache_dir})/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
 
-      if mac_ops_trash_move "${cache_item}" "browser-cache" "chrome"; then
+      if mac_ops_ignore_check_path "${cache_item}"; then
+      mac_ops_log_debug "User ignore (path): ${cache_item}"
+      continue
+    fi
+
+    if mac_ops_trash_move "${cache_item}" "browser-cache" "chrome"; then
         MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
         MAC_OPS_CLEANED_BYTES=$((${MAC_OPS_CLEANED_BYTES:-0} + item_size))
       fi
@@ -151,7 +161,12 @@ _mac_ops_browser_firefox() {
       item_size=$(mac_ops_get_dir_size "${cache_item}")
       mac_ops_log_info "Cleaning Firefox cache item: $(basename ${profile_dir})/${item_basename} ($(mac_ops_format_bytes ${item_size}))"
 
-      if mac_ops_trash_move "${cache_item}" "browser-cache" "firefox"; then
+      if mac_ops_ignore_check_path "${cache_item}"; then
+      mac_ops_log_debug "User ignore (path): ${cache_item}"
+      continue
+    fi
+
+    if mac_ops_trash_move "${cache_item}" "browser-cache" "firefox"; then
         MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
         MAC_OPS_CLEANED_BYTES=$((${MAC_OPS_CLEANED_BYTES:-0} + item_size))
       fi

@@ -13,8 +13,14 @@ mac_ops_notify() {
     return 0
   fi
 
+  # Escape special characters before embedding in AppleScript string
+  local safe_title="${title//\\/\\\\}"
+  safe_title="${safe_title//\"/\\\"}"
+  local safe_message="${message//\\/\\\\}"
+  safe_message="${safe_message//\"/\\\"}"
+
   # Ignore errors even if osascript fails (e.g., headless environment)
-  osascript -e "display notification \"$message\" with title \"$title\"" 2>/dev/null || true
+  osascript -e "display notification \"${safe_message}\" with title \"${safe_title}\"" 2>/dev/null || true
   return 0
 }
 

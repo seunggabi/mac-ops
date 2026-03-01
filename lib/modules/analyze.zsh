@@ -31,11 +31,11 @@ mac_ops_analyze() {
   current_user="${USER}"
 
   mac_ops_log_info "Starting disk space analysis..."
-  echo ""
-  echo "$(mac_ops_color_bold '==========================================')"
-  echo "$(mac_ops_color_bold '        mac-ops Disk Space Analysis')"
-  echo "$(mac_ops_color_bold '==========================================')"
-  echo ""
+  print
+  print -- "$(mac_ops_color_bold '==========================================')"
+  print -- "$(mac_ops_color_bold '        mac-ops Disk Space Analysis')"
+  print -- "$(mac_ops_color_bold '==========================================')"
+  print
 
   # 1. ~/Library/Caches
   category_name="System Cache"
@@ -43,7 +43,7 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     cache_total=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${cache_total}")
-    echo "$(mac_ops_color_blue '●') ${category_name} (Total): ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name} (Total): ${formatted_size}"
 
     # Calculate size excluding com.apple.*
     cache_non_apple=0
@@ -65,11 +65,11 @@ mac_ops_analyze() {
     done
 
     formatted_size=$(mac_ops_format_bytes "${cache_non_apple}")
-    echo "  $(mac_ops_color_green '└─') Excluding Apple: ${formatted_size}"
+    print -- "  $(mac_ops_color_green '└─') Excluding Apple: ${formatted_size}"
     total_bytes=$((total_bytes + cache_non_apple))
     mac_ops_log_debug "System cache: ${formatted_size} (Excluding Apple)"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
     mac_ops_log_debug "System cache directory not found"
   fi
 
@@ -79,11 +79,11 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "System logs: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
   # 3. ~/Library/Developer/Xcode/DerivedData
@@ -92,11 +92,11 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "Xcode DerivedData: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: Not installed"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: Not installed"
   fi
 
   # 4. Homebrew cache
@@ -106,14 +106,14 @@ mac_ops_analyze() {
     if [[ -n "${target_path}" && -d "${target_path}" ]]; then
       size_bytes=$(mac_ops_get_dir_size "${target_path}")
       formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-      echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+      print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
       total_bytes=$((total_bytes + size_bytes))
       mac_ops_log_debug "Homebrew cache: ${formatted_size}"
     else
-      echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+      print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
     fi
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: Not installed"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: Not installed"
   fi
 
   # 5. npm cache
@@ -122,11 +122,11 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "npm cache: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
   # 6. yarn cache
@@ -135,11 +135,11 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "Yarn cache: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
   # 7. pnpm cache
@@ -148,11 +148,11 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "pnpm Store: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
   # 8. pip cache
@@ -161,11 +161,11 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "pip cache: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
   # 9. Gradle cache
@@ -174,11 +174,11 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "Gradle cache: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
   # 10. /tmp (current user files only)
@@ -192,11 +192,11 @@ mac_ops_analyze() {
       user_tmp_size=$((user_tmp_size + item_size))
     done < <(find "${target_path}" -maxdepth 1 -user "${current_user}" 2>/dev/null)
     formatted_size=$(mac_ops_format_bytes "${user_tmp_size}")
-    echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + user_tmp_size))
     mac_ops_log_debug "Temporary files: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
   # 11. /private/var/folders (current user files only)
@@ -209,15 +209,15 @@ mac_ops_analyze() {
       user_var_size=$((user_var_size + item_size))
     done < <(find "${target_path}" -maxdepth 3 -type d -user "${current_user}" 2>/dev/null)
     formatted_size=$(mac_ops_format_bytes "${user_var_size}")
-    echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + user_var_size))
     mac_ops_log_debug "System temp folders: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
   # 12. Browser cache
-  echo "$(mac_ops_color_blue '●') Browser Cache:"
+  print -- "$(mac_ops_color_blue '●') Browser Cache:"
 
   # Safari
   category_name="  Safari"
@@ -225,11 +225,11 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "  $(mac_ops_color_green '└─') Safari: ${formatted_size}"
+    print -- "  $(mac_ops_color_green '└─') Safari: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "Safari cache: ${formatted_size}"
   else
-    echo "  $(mac_ops_color_green '└─') Safari: N/A"
+    print -- "  $(mac_ops_color_green '└─') Safari: N/A"
   fi
 
   # Chrome
@@ -237,11 +237,11 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "  $(mac_ops_color_green '└─') Chrome: ${formatted_size}"
+    print -- "  $(mac_ops_color_green '└─') Chrome: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "Chrome cache: ${formatted_size}"
   else
-    echo "  $(mac_ops_color_green '└─') Chrome: Not installed"
+    print -- "  $(mac_ops_color_green '└─') Chrome: Not installed"
   fi
 
   # Firefox
@@ -249,11 +249,11 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "  $(mac_ops_color_green '└─') Firefox: ${formatted_size}"
+    print -- "  $(mac_ops_color_green '└─') Firefox: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "Firefox cache: ${formatted_size}"
   else
-    echo "  $(mac_ops_color_green '└─') Firefox: Not installed"
+    print -- "  $(mac_ops_color_green '└─') Firefox: Not installed"
   fi
 
   # 13. Docker
@@ -261,14 +261,14 @@ mac_ops_analyze() {
   if command -v docker &>/dev/null && docker info &>/dev/null; then
     docker_size=$(docker system df --format "{{.Size}}" 2>/dev/null | head -1)
     if [[ -n "${docker_size}" ]]; then
-      echo "$(mac_ops_color_blue '●') ${category_name}: ${docker_size}"
+      print -- "$(mac_ops_color_blue '●') ${category_name}: ${docker_size}"
       mac_ops_log_debug "Docker: ${docker_size}"
       # Docker size is not included in total_bytes (managed separately)
     else
-      echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+      print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
     fi
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: Not installed or not running"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: Not installed or not running"
   fi
 
   # 14. mac-ops trash
@@ -277,20 +277,20 @@ mac_ops_analyze() {
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")
-    echo "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: ${formatted_size}"
     total_bytes=$((total_bytes + size_bytes))
     mac_ops_log_debug "mac-ops trash: ${formatted_size}"
   else
-    echo "$(mac_ops_color_blue '●') ${category_name}: N/A"
+    print -- "$(mac_ops_color_blue '●') ${category_name}: N/A"
   fi
 
   # Total summary
-  echo ""
-  echo "$(mac_ops_color_bold '==========================================')"
+  print
+  print -- "$(mac_ops_color_bold '==========================================')"
   formatted_size=$(mac_ops_format_bytes "${total_bytes}")
-  echo "$(mac_ops_color_bold "Total Reclaimable Space: $(mac_ops_color_green "${formatted_size}")")"
-  echo "$(mac_ops_color_bold '==========================================')"
-  echo ""
+  print -- "$(mac_ops_color_bold "Total Reclaimable Space: $(mac_ops_color_green "${formatted_size}")")"
+  print -- "$(mac_ops_color_bold '==========================================')"
+  print
 
   mac_ops_log_info "Disk space analysis completed: Total ${formatted_size}"
 

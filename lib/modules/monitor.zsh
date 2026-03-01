@@ -25,14 +25,16 @@ _mac_ops_monitor_mem() {
   local vm_out
   vm_out=$(vm_stat 2>/dev/null)
 
-  local wired active compressed
+  # Include speculative pages — consistent with snapshot.zsh formula
+  local wired active compressed speculative
   wired=$(awk '/Pages wired down/{gsub(/\./, "", $NF); print $NF+0}' <<< "$vm_out")
   active=$(awk '/Pages active/{gsub(/\./, "", $NF); print $NF+0}' <<< "$vm_out")
   compressed=$(awk '/Pages occupied by compressor/{gsub(/\./, "", $NF); print $NF+0}' <<< "$vm_out")
+  speculative=$(awk '/Pages speculative/{gsub(/\./, "", $NF); print $NF+0}' <<< "$vm_out")
 
   local total used pct
   total=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
-  used=$(( (wired + active + compressed) * page_size ))
+  used=$(( (wired + active + compressed + speculative) * page_size ))
   pct=$(awk "BEGIN{printf \"%.1f\", ($total>0)?($used/$total*100):0}")
 
   echo "$used $total $pct"

@@ -109,6 +109,12 @@ _mac_ops_log_clean_dir() {
       continue
     fi
 
+    # User ignore rules: path pattern
+    if mac_ops_ignore_check_path "${file_path}"; then
+      mac_ops_log_debug "User ignore (path): ${file_path}"
+      continue
+    fi
+
     # Record file size
     file_size=$(mac_ops_get_dir_size "${file_path}")
 

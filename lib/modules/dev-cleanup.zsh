@@ -156,6 +156,10 @@ _mac_ops_dev_npm() {
       mac_ops_log_debug "Skipping recent npm cache: $(basename ${item})"
       continue
     fi
+    if mac_ops_ignore_check_path "${item}"; then
+      mac_ops_log_debug "User ignore (path): ${item}"
+      continue
+    fi
     _dev_sz=$(mac_ops_get_dir_size "${item}")
     if mac_ops_trash_move "${item}" "npm cache cleanup" "dev-cleanup"; then
       _dev_cleaned=$((_dev_cleaned + _dev_sz))
@@ -212,6 +216,10 @@ _mac_ops_dev_yarn() {
     _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
     if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
       mac_ops_log_debug "Skipping recent yarn cache: $(basename ${item})"
+      continue
+    fi
+    if mac_ops_ignore_check_path "${item}"; then
+      mac_ops_log_debug "User ignore (path): ${item}"
       continue
     fi
     _dev_sz=$(mac_ops_get_dir_size "${item}")
@@ -272,6 +280,10 @@ _mac_ops_dev_pnpm() {
       mac_ops_log_debug "Skipping recent pnpm store: $(basename ${item})"
       continue
     fi
+    if mac_ops_ignore_check_path "${item}"; then
+      mac_ops_log_debug "User ignore (path): ${item}"
+      continue
+    fi
     _dev_sz=$(mac_ops_get_dir_size "${item}")
     if mac_ops_trash_move "${item}" "pnpm store cleanup" "dev-cleanup"; then
       _dev_cleaned=$((_dev_cleaned + _dev_sz))
@@ -328,6 +340,10 @@ _mac_ops_dev_pip() {
     _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
     if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
       mac_ops_log_debug "Skipping recent pip cache: $(basename ${item})"
+      continue
+    fi
+    if mac_ops_ignore_check_path "${item}"; then
+      mac_ops_log_debug "User ignore (path): ${item}"
       continue
     fi
     _dev_sz=$(mac_ops_get_dir_size "${item}")
@@ -397,6 +413,10 @@ _mac_ops_dev_gradle() {
     _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
     if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
       mac_ops_log_debug "Skipping recent gradle cache: ${_dev_item_name}"
+      continue
+    fi
+    if mac_ops_ignore_check_path "${item}"; then
+      mac_ops_log_debug "User ignore (path): ${item}"
       continue
     fi
     _dev_sz=$(mac_ops_get_dir_size "${item}")

@@ -74,6 +74,12 @@ _mac_ops_tmp_clean_path() {
       continue
     fi
 
+    # User ignore rules: path pattern
+    if mac_ops_ignore_check_path "${file_path}"; then
+      mac_ops_log_debug "User ignore (path): ${file_path}"
+      continue
+    fi
+
     # Record file size
     file_size=$(mac_ops_get_dir_size "${file_path}")
 
@@ -129,6 +135,12 @@ _mac_ops_tmp_clean_var_folders() {
 
     # Size guard check
     if ! mac_ops_check_size_guard "${file_path}"; then
+      continue
+    fi
+
+    # User ignore rules: path pattern
+    if mac_ops_ignore_check_path "${file_path}"; then
+      mac_ops_log_debug "User ignore (path): ${file_path}"
       continue
     fi
 
