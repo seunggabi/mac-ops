@@ -79,9 +79,12 @@ Commands:
   run              Run cleanup (default command)
   analyze          Disk space analysis report
   monitor          Memory & CPU usage dashboard (7-day history)
+  monitor --hours  Show hourly sparkline view
   monitor top [N]  Show top N processes by memory (default: 10)
   monitor kill [M] Kill processes using more than M MB (default: 500)
   monitor collect  Record a snapshot (use for scheduled collection)
+  monitor setup    Install launchd agent (collect every 5 min)
+  monitor unsetup  Uninstall launchd agent
   status           Show trash status and disk usage
   restore <path>   Restore from trash to original location
   list-trash       List trash contents
@@ -398,6 +401,32 @@ _mac_ops_cmd_monitor() {
     collect)
       mac_ops_monitor_collect
       mac_ops_log_info "Monitor snapshot collected"
+      ;;
+    setup)
+      local plist_src="${MAC_OPS_ROOT}/launchd/com.mac-ops.monitor.plist"
+      local plist_dst="${HOME}/Library/LaunchAgents/com.mac-ops.monitor.plist"
+      local bin_path="${MAC_OPS_ROOT}/bin/mac-ops"
+      local home_path="${HOME}/.mac-ops"
+      if [[ ! -f "${plist_src}" ]]; then
+        mac_ops_log_error "plist template not found: ${plist_src}"
+        return 1
+      fi
+      mkdir -p "${HOME}/Library/LaunchAgents" 2>/dev/null || true
+      sed -e "s|REPLACEME_MAC_OPS_BIN|${bin_path}|g" \
+          -e "s|REPLACEME_MAC_OPS_HOME|${home_path}|g" \
+          "${plist_src}" > "${plist_dst}"
+      launchctl load "${plist_dst}" 2>/dev/null || true
+      mac_ops_log_info "Monitor launchd agent installed (every 5 min): ${plist_dst}"
+      ;;
+    unsetup)
+      local plist_path="${HOME}/Library/LaunchAgents/com.mac-ops.monitor.plist"
+      if [[ ! -f "${plist_path}" ]]; then
+        mac_ops_log_warn "Monitor launchd agent is not installed."
+        return 0
+      fi
+      launchctl unload "${plist_path}" 2>/dev/null || true
+      rm -f "${plist_path}"
+      mac_ops_log_info "Monitor launchd agent uninstalled"
       ;;
     *)
       # treat unknown subcommand as flag to show (e.g., --hours passed first)

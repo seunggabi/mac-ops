@@ -33,9 +33,9 @@ git clone https://github.com/seunggabi/mac-ops.git && cd mac-ops && chmod +x bin
 First run:
 
 ```bash
-bin/mac-ops run --dry-run   # Preview what will be cleaned
-bin/mac-ops analyze          # Disk space report
-bin/mac-ops run              # Execute cleanup
+mac-ops run --dry-run   # Preview what will be cleaned
+mac-ops analyze          # Disk space report
+mac-ops run              # Execute cleanup
 ```
 
 ## Why mac-ops
@@ -45,14 +45,14 @@ bin/mac-ops run              # Execute cleanup
 Every file mac-ops cleans is moved to `~/.mac-ops/.trash/` instead of being permanently deleted. You have **72 hours** to restore anything with a single command. No other CLI cleanup tool offers this level of protection.
 
 ```bash
-bin/mac-ops restore ~/Library/Caches/com.important.app   # Undo a mistake instantly
+mac-ops restore ~/Library/Caches/com.important.app   # Undo a mistake instantly
 ```
 
 ### Zero Dependencies
 
 Pure zsh. No Python, no Ruby, no Node.js. Only macOS built-in tools (`zsh`, `plutil`, `launchd`). Install and run anywhere with no setup overhead.
 
-### 5-Layer Safety System
+### 6-Layer Safety System
 
 | Layer | Protection |
 |-------|-----------|
@@ -60,6 +60,7 @@ Pure zsh. No Python, no Ruby, no Node.js. Only macOS built-in tools (`zsh`, `plu
 | Blacklist | System paths, keychains, and user documents are never touched |
 | Size Guard | Files over 2 GB are automatically skipped |
 | Process Protection | Critical system processes (`kernel_task`, `WindowServer`, `launchd`, ...) are never killed |
+| User Ignore Rules | `~/.mac-ops/ignore` lets you exempt specific apps, processes, or paths |
 | Lock | Prevents concurrent execution to avoid race conditions |
 
 ### 10 Cleanup Modules
@@ -86,7 +87,7 @@ File-based modules run concurrently to minimize cleanup time. Process modules ex
 Native `launchd` integration runs cleanup every hour, catching up on missed runs after sleep/wake. One command to install:
 
 ```bash
-bin/mac-ops install
+mac-ops install
 ```
 
 ## Comparison
@@ -108,51 +109,88 @@ bin/mac-ops install
 
 ```bash
 # Preview (dry-run) - Check cleanup targets without actual deletion
-bin/mac-ops run --dry-run
+mac-ops run --dry-run
 
 # Execute cleanup
-bin/mac-ops run
+mac-ops run
 
 # Run specific module only
-bin/mac-ops run --module=cache
-bin/mac-ops run --module=browser
-bin/mac-ops run --module=docker
+mac-ops run --module=cache
+mac-ops run --module=browser
+mac-ops run --module=docker
 
 # Disk space analysis report
-bin/mac-ops analyze
+mac-ops analyze
 
 # Verbose logging
-bin/mac-ops run --verbose
+mac-ops run --verbose
+```
+
+### Monitor
+
+```bash
+# Memory & CPU dashboard with 7-day history
+mac-ops monitor
+
+# Hourly sparkline view (24h breakdown per day)
+mac-ops monitor --hours
+
+# Show top N processes by memory usage (default: 10)
+mac-ops monitor top 20
+
+# Kill processes using more than M MB (default: 500)
+mac-ops monitor kill 1000
+
+# Record a memory/CPU snapshot manually
+mac-ops monitor collect
+```
+
+History is stored as CSV in `~/.mac-ops/monitor/YYYY-MM-DD.csv` and auto-purged after 7 days.
+
+To collect snapshots automatically, add to crontab (`crontab -e`):
+
+```cron
+# Collect every 5 minutes
+*/5 * * * * mac-ops monitor collect >> ~/.mac-ops/.logs/monitor.log 2>&1
+```
+
+Or via launchd (recommended on macOS):
+
+```bash
+mac-ops monitor setup    # Install launchd agent (every 5 min)
+mac-ops monitor unsetup  # Uninstall
 ```
 
 ### Trash Management
 
 ```bash
 # List trash contents
-bin/mac-ops list-trash
+mac-ops list-trash
 
 # Restore accidentally deleted files
-bin/mac-ops restore ~/Library/Caches/com.important.app
+mac-ops restore ~/Library/Caches/com.important.app
 
 # Immediately purge expired items
-bin/mac-ops purge
+mac-ops purge
 
 # Check current status (trash, disk usage, launchd status)
-bin/mac-ops status
+mac-ops status
 ```
 
 ### Miscellaneous
 
 ```bash
 # Check current configuration
-bin/mac-ops config
+mac-ops config
 
 # Check version
-bin/mac-ops version
+mac-ops version
 
 # Show help
-bin/mac-ops help
+mac-ops help
 ```
+
+> Available modules: `cache`, `tmp`, `log`, `zombie`, `orphan`, `orphan-app`, `brew`, `dev`, `docker`, `browser`
 
 ## Configuration
 
@@ -166,11 +204,38 @@ export MAC_OPS_CACHE_MAX_AGE_DAYS=30   # Delete caches older than N days (defaul
 export MAC_OPS_CACHE_RECENT_DAYS=7     # Protect caches used within N days (default: 7)
 
 # Example: More aggressive cache cleanup
-MAC_OPS_CACHE_MAX_AGE_DAYS=30 bin/mac-ops run --module=cache
+MAC_OPS_CACHE_MAX_AGE_DAYS=30 mac-ops run --module=cache
 
 # Example: Protect only very recent caches
-MAC_OPS_CACHE_RECENT_DAYS=1 bin/mac-ops run --module=cache
+MAC_OPS_CACHE_RECENT_DAYS=1 mac-ops run --module=cache
 ```
+
+### Ignore File
+
+Create `~/.mac-ops/ignore` to permanently exempt specific apps, processes, or paths from cleanup:
+
+```ini
+# ~/.mac-ops/ignore
+# Lines starting with # are comments. Empty lines are ignored.
+# Glob patterns are supported (*, **, ?).
+
+[bundle]
+# Bundle ID patterns — skipped by orphan-app-cleanup
+# com.mycompany.*
+# com.example.DevBuild
+
+[process]
+# Process name patterns — skipped by zombie-killer and orphan-killer
+# my-custom-daemon
+# MyVendorHelper*
+
+[path]
+# Path patterns — skipped by all file-based cleanup modules
+# ~/work/.cache
+# ~/projects/my-project
+```
+
+Copy `config/ignore.example` as a starting template.
 
 ### Cache Protection Policy
 
@@ -179,8 +244,8 @@ The cache cleanup module now includes **smart protection** to prevent accidental
 1. ✅ **Apple system caches** (`com.apple.*`) - Always protected
 2. ✅ **Installed applications** - Caches from apps in `/Applications` are protected
 3. ✅ **Running applications** - Caches from currently running apps are protected
-4. ✅ **Recently used caches** - Caches accessed within `MAC_OPS_CACHE_RECENT_DAYS` (default: 3 days) are protected
-5. ✅ **Orphan caches only** - Only caches from uninstalled/inactive apps older than `MAC_OPS_CACHE_MAX_AGE_DAYS` (default: 7 days) are cleaned
+4. ✅ **Recently used caches** - Caches accessed within `MAC_OPS_CACHE_RECENT_DAYS` (default: 7 days) are protected
+5. ✅ **Orphan caches only** - Only caches from uninstalled/inactive apps older than `MAC_OPS_CACHE_MAX_AGE_DAYS` (default: 30 days) are cleaned
 
 This ensures your login sessions, preferences, and active app data are never touched during cleanup.
 
@@ -192,12 +257,12 @@ macOS native scheduler runs automatically every hour. Catches up on missed tasks
 
 ```bash
 # Install
-bin/mac-ops install
+mac-ops install
 ```
 
 ```bash
 # Uninstall
-bin/mac-ops uninstall
+mac-ops uninstall
 ```
 
 ### Method 2: crontab
@@ -210,10 +275,10 @@ Add the following content:
 
 ```cron
 # Run mac-ops every hour
-0 * * * * /path/to/mac-ops/bin/mac-ops run --scheduled 2>&1 >> ~/.mac-ops/.logs/cron.log
+0 * * * * mac-ops run --scheduled 2>&1 >> ~/.mac-ops/.logs/cron.log
 
 # Or run daily at 3 AM
-0 3 * * * /path/to/mac-ops/bin/mac-ops run --scheduled 2>&1 >> ~/.mac-ops/.logs/cron.log
+0 3 * * * mac-ops run --scheduled 2>&1 >> ~/.mac-ops/.logs/cron.log
 ```
 
 > Replace `/path/to/mac-ops` with your actual installation path.
@@ -238,9 +303,9 @@ sudo rm -rf ~/.mac-ops/.trash
 | `sudo rm -rf ~/.mac-ops/.trash` | **CRITICAL** | Permanently deletes all recoverable files, bypassing the 72-hour safety net |
 
 **Before running these commands:**
-1. Run `bin/mac-ops list-trash` to check what is in the trash
-2. Run `bin/mac-ops run --dry-run` to preview cleanup targets
-3. Restore any important files with `bin/mac-ops restore <path>`
+1. Run `mac-ops list-trash` to check what is in the trash
+2. Run `mac-ops run --dry-run` to preview cleanup targets
+3. Restore any important files with `mac-ops restore <path>`
 
 ### Full Disk Access Permission Required
 
@@ -257,7 +322,7 @@ Add Terminal.app (or iTerm, Warp, etc. depending on your terminal). For launchd 
 When using for the first time, always check what files will be cleaned with `--dry-run`.
 
 ```bash
-bin/mac-ops run --dry-run
+mac-ops run --dry-run
 ```
 
 ### 72-hour Grace Period
@@ -272,14 +337,16 @@ bin/mac-ops run --dry-run
 |------|--------|
 | `/System/*`, `/bin/*`, `/sbin/*`, `/usr/*` | SIP protected |
 | `~/Library/Keychains/*` | Keychains (passwords, certificates) |
-| `~/Documents/*`, `~/Desktop/*` | User documents |
-| `/Library/LaunchDaemons/*` | System services |
+| `~/Library/Preferences/*` | User preferences |
+| `~/Documents/*`, `~/Desktop/*`, `~/Downloads/*` | User documents |
+| `/Library/LaunchDaemons/*`, `/Library/LaunchAgents/*` | System services |
 
 ### Processes Never Killed
 
 ```
 kernel_task, launchd, WindowServer, loginwindow,
-SystemUIServer, Finder, cfprefsd, mds, mds_stores
+SystemUIServer, Finder, Dock, cfprefsd, mds, mds_stores,
+coreaudiod, opendirectoryd
 ```
 
 ### Docker Module
@@ -302,7 +369,8 @@ mac-ops/
 │   │   ├── logger.zsh             # Logging
 │   │   ├── lock.zsh               # Prevent duplicate execution
 │   │   ├── safety.zsh             # Safety system
-│   │   └── disk.zsh               # Disk monitoring
+│   │   ├── disk.zsh               # Disk monitoring
+│   │   └── ignore.zsh             # User ignore rules (~/.mac-ops/ignore)
 │   ├── modules/                   # Cleanup modules
 │   │   ├── cache-cleanup.zsh
 │   │   ├── tmp-cleanup.zsh
@@ -314,7 +382,8 @@ mac-ops/
 │   │   ├── dev-cleanup.zsh
 │   │   ├── docker-cleanup.zsh
 │   │   ├── browser-cleanup.zsh
-│   │   └── analyze.zsh
+│   │   ├── analyze.zsh
+│   │   └── monitor.zsh
 │   └── utils/                     # Shared utilities
 │       ├── format.zsh
 │       ├── notify.zsh
@@ -322,6 +391,8 @@ mac-ops/
 │       ├── plist-helper.zsh
 │       └── snapshot.zsh
 ├── config/                        # Configuration files
+│   ├── default.plist              # Default module enable/disable settings
+│   └── ignore.example             # Example ignore file template
 ├── launchd/                       # launchd agents
 ├── scripts/                       # Utility scripts
 ├── demo/                          # Demo and example files
