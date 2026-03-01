@@ -376,6 +376,7 @@ _mac_ops_scan_preferences() {
 
   mac_ops_log_info "Orphan Preferences scan: ${pref_dir}"
 
+  # shellcheck disable=SC1036,SC1058,SC1072,SC1073
   for plist_file in "${pref_dir}"/*.plist(N); do
     [[ ! -f "${plist_file}" ]] && continue
 

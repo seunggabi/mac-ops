@@ -151,6 +151,7 @@ _mac_ops_monitor_hourly_stats() {
 _mac_ops_monitor_purge_old() {
   local cutoff=$(( $(date +%s) - MAC_OPS_MONITOR_RETENTION_DAYS * 86400 ))
   local f fname epoch
+  # shellcheck disable=SC1036,SC1058,SC1072,SC1073
   for f in "${MAC_OPS_MONITOR_DIR}"/*.csv(N); do
     fname=$(basename "$f" .csv)
     epoch=$(date -j -f '%Y-%m-%d' "$fname" +%s 2>/dev/null || echo 0)

@@ -173,6 +173,7 @@ _mac_ops_docker_parse_size() {
   local number
   local unit
 
+  # shellcheck disable=SC2076
   if [[ "${size_str}" =~ '^([0-9.]+)([KMGT]?B)$' ]]; then
     number="${match[1]}"
     unit="${match[2]}"
