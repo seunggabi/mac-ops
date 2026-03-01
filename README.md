@@ -27,7 +27,10 @@ brew install seunggabi/tap/mac-ops
 Or clone from source:
 
 ```bash
-git clone https://github.com/seunggabi/mac-ops.git && cd mac-ops && chmod +x bin/mac-ops
+git clone https://github.com/seunggabi/mac-ops.git
+cd mac-ops
+chmod +x bin/mac-ops
+export PATH="$PWD/bin:$PATH"  # or use ./bin/mac-ops instead of mac-ops
 ```
 
 First run:
@@ -126,6 +129,8 @@ mac-ops analyze
 mac-ops run --verbose
 ```
 
+> Available modules: `cache`, `tmp`, `log`, `zombie`, `orphan`, `orphan-app`, `brew`, `dev`, `docker`, `browser`
+
 ### Monitor
 
 ```bash
@@ -146,20 +151,6 @@ mac-ops monitor collect
 ```
 
 History is stored as CSV in `~/.mac-ops/monitor/YYYY-MM-DD.csv` and auto-purged after 7 days.
-
-To collect snapshots automatically, add to crontab (`crontab -e`):
-
-```cron
-# Collect every 5 minutes
-*/5 * * * * mac-ops monitor collect >> ~/.mac-ops/.logs/monitor.log 2>&1
-```
-
-Or via launchd (recommended on macOS):
-
-```bash
-mac-ops monitor setup    # Install launchd agent (every 5 min)
-mac-ops monitor unsetup  # Uninstall
-```
 
 ### Trash Management
 
@@ -189,8 +180,6 @@ mac-ops version
 # Show help
 mac-ops help
 ```
-
-> Available modules: `cache`, `tmp`, `log`, `zombie`, `orphan`, `orphan-app`, `brew`, `dev`, `docker`, `browser`
 
 ## Configuration
 
@@ -239,7 +228,7 @@ Copy `config/ignore.example` as a starting template.
 
 ### Cache Protection Policy
 
-The cache cleanup module now includes **smart protection** to prevent accidental deletion of active application data:
+The cache cleanup module includes **smart protection** to prevent accidental deletion of active application data:
 
 1. ✅ **Apple system caches** (`com.apple.*`) - Always protected
 2. ✅ **Installed applications** - Caches from apps in `/Applications` are protected
@@ -281,11 +270,24 @@ Add the following content:
 0 3 * * * mac-ops run --scheduled 2>&1 >> ~/.mac-ops/.logs/cron.log
 ```
 
-> Replace `/path/to/mac-ops` with your actual installation path.
+### Method 3: Monitor Collection (launchd)
+
+Automatically collect CPU/memory snapshots every 5 minutes:
+
+```bash
+mac-ops monitor setup    # Install launchd agent
+mac-ops monitor unsetup  # Uninstall
+```
+
+Or via crontab:
+
+```cron
+*/5 * * * * mac-ops monitor collect >> ~/.mac-ops/.logs/monitor.log 2>&1
+```
 
 ## Cautions
 
-### Danger Process
+### Destructive Commands
 
 > **WARNING**: The following commands are irreversible. Data cannot be recovered once executed.
 
