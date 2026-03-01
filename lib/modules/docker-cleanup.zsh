@@ -173,24 +173,19 @@ _mac_ops_docker_parse_size() {
   local number
   local unit
 
-  if [[ "${size_str}" =~ ^([0-9.]+)([KMGT]?B)$ ]]; then
-    number="${BASH_REMATCH[1]}"
-    unit="${BASH_REMATCH[2]}"
+  if [[ "${size_str}" =~ '^([0-9.]+)([KMGT]?B)$' ]]; then
+    number="${match[1]}"
+    unit="${match[2]}"
   else
     # Return 0 on parsing failure
     echo "0"
     return 0
   fi
 
-  # Convert decimal to integer (1.2 -> 12, multiply by 10)
+  # Convert to integer bytes using awk for correct decimal handling (1.23GB, 0.5MB, etc.)
   local int_number
-  if [[ "${number}" == *.* ]]; then
-    # Remove decimal point and multiply by 10
-    int_number=$(echo "${number}" | sed 's/\.//' | sed 's/^0*//')
-    [[ -z "${int_number}" ]] && int_number=0
-  else
-    int_number=$((number * 10))
-  fi
+  int_number=$(awk "BEGIN{printf \"%d\", ${number} * 10}" 2>/dev/null)
+  [[ -z "${int_number}" ]] && int_number=0
 
   # Convert by unit
   local bytes=0

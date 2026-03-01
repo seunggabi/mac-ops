@@ -106,6 +106,11 @@ mac_ops_cache_cleanup() {
 
       mac_ops_log_info "Cache directory cleanup: ${bundle_name} (${file_count} files, $(mac_ops_format_bytes ${dir_size}))"
 
+      if mac_ops_ignore_check_path "${bundle_dir}"; then
+        mac_ops_log_debug "User ignore (path): ${bundle_dir}"
+        continue
+      fi
+
       if mac_ops_trash_move "${bundle_dir}" "cache-expired" "cache-cleanup"; then
         MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + file_count))
         MAC_OPS_CLEANED_BYTES=$((${MAC_OPS_CLEANED_BYTES:-0} + dir_size))
@@ -133,7 +138,7 @@ mac_ops_cache_cleanup() {
     age_seconds=$((now_epoch - mtime))
 
     if [[ ${age_seconds} -ge ${threshold_seconds} ]]; then
-      if mac_ops_is_path_safe "${cache_file}" && mac_ops_check_size_guard "${cache_file}"; then
+      if mac_ops_is_path_safe "${cache_file}" && mac_ops_check_size_guard "${cache_file}" && ! mac_ops_ignore_check_path "${cache_file}"; then
         file_size=$(mac_ops_get_dir_size "${cache_file}")
         if mac_ops_trash_move "${cache_file}" "cache-expired" "cache-cleanup"; then
           MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))

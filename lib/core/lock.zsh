@@ -31,10 +31,10 @@ mac_ops_acquire_lock() {
     fi
   fi
 
-  # Create new lock file (record current PID)
-  print -- "$$" > "${MAC_OPS_LOCK_FILE}" 2>/dev/null
-  if [[ $? -ne 0 ]]; then
-    mac_ops_log_error "Failed to create lock file: ${MAC_OPS_LOCK_FILE}"
+  # Atomic lock creation using noclobber (prevents TOCTOU race condition)
+  # If another process created the file between the check above and here, this will fail safely
+  if ! ( set -o noclobber; print -- "$$" > "${MAC_OPS_LOCK_FILE}" ) 2>/dev/null; then
+    mac_ops_log_error "Failed to create lock file (another process may have started): ${MAC_OPS_LOCK_FILE}"
     return 1
   fi
 

@@ -52,8 +52,7 @@ mac_ops_check_disk_space() {
   fi
 
   local available_bytes
-  available_bytes=$(mac_ops_get_disk_available)
-  if [[ $? -ne 0 ]]; then
+  if ! available_bytes=$(mac_ops_get_disk_available); then
     return 1
   fi
 
@@ -99,8 +98,7 @@ mac_ops_get_dir_size() {
 # -----------------------------------------------------------------------------
 mac_ops_emergency_purge() {
   local usage
-  usage=$(mac_ops_get_disk_usage)
-  if [[ $? -ne 0 ]]; then
+  if ! usage=$(mac_ops_get_disk_usage); then
     return 1
   fi
 
