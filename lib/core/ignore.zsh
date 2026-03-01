@@ -87,7 +87,8 @@ mac_ops_ignore_check_bundle() {
   local name="${1}"
   local pattern
   for pattern in "${_MAC_OPS_IGNORE_BUNDLES[@]}"; do
-    # ${~pattern} enables glob expansion in the pattern
+    # ${~pattern} enables glob expansion in the pattern (zsh-specific)
+    # shellcheck disable=SC2053,SC2296
     if [[ "${name}" == ${~pattern} ]]; then
       return 0
     fi
@@ -105,6 +106,7 @@ mac_ops_ignore_check_process() {
   local name="${1}"
   local pattern
   for pattern in "${_MAC_OPS_IGNORE_PROCESSES[@]}"; do
+    # shellcheck disable=SC2053,SC2296
     if [[ "${name}" == ${~pattern} ]]; then
       return 0
     fi
@@ -122,7 +124,8 @@ mac_ops_ignore_check_path() {
   local target="${1}"
   local pattern
   for pattern in "${_MAC_OPS_IGNORE_PATHS[@]}"; do
-    # Exact or glob match
+    # Exact or glob match (${~pattern} is zsh-specific glob expansion)
+    # shellcheck disable=SC2053,SC2296
     if [[ "${target}" == ${~pattern} ]]; then
       return 0
     fi
