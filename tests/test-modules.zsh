@@ -166,6 +166,25 @@ assert_eq "$((orphan_app_exit <= 1))" "1" "orphan_app_cleanup in dry-run complet
 print ""
 
 # =============================================================================
+# test_orphan_app_bundle_id_name
+# A name without two literal dots is not a bundle ID and must never be scanned
+# as orphan app data (regression: JetBrains, Naver, Garmin were trashed)
+# =============================================================================
+print "[TEST] test_orphan_app_bundle_id_name"
+
+local _bid_name
+for _bid_name in "JetBrains" "Naver" "Garmin" "iTerm2" "Google" "iCloud" "Sublime Text" "FaceTime" "a.b" "abcd"; do
+  _mac_ops_is_bundle_id_name "${_bid_name}"
+  assert_exit_code "$?" "1" "not a bundle ID name: ${_bid_name}"
+done
+for _bid_name in "com.example.app" "org.mozilla.firefox" "com.google.Chrome.helper" "io.github.some-tool"; do
+  _mac_ops_is_bundle_id_name "${_bid_name}"
+  assert_exit_code "$?" "0" "bundle ID name: ${_bid_name}"
+done
+
+print ""
+
+# =============================================================================
 # test_brew_cleanup_dryrun
 # =============================================================================
 print "[TEST] test_brew_cleanup_dryrun"

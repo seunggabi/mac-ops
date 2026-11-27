@@ -103,6 +103,25 @@ _mac_ops_is_safelisted() {
 }
 
 # -----------------------------------------------------------------------------
+# Reverse-domain bundle ID name: two labels and at least two literal dots
+# (com.example.app). The pattern lives in a variable on purpose: zsh removes the
+# backslash from an unquoted \. inside [[ =~ ]], which turns each dot into "any
+# character" and makes the pattern match every name of four or more characters
+# (JetBrains, Naver, Garmin, iTerm2). A variable's value is used as the regex
+# unchanged.
+# -----------------------------------------------------------------------------
+typeset -g _MAC_OPS_BUNDLE_ID_RE='^[a-zA-Z][a-zA-Z0-9-]*\.[a-zA-Z][a-zA-Z0-9-]*\..+'
+
+# -----------------------------------------------------------------------------
+# Internal: Check if a name looks like a reverse-domain bundle ID
+# Returns 0 (true) if it does, 1 (false) if not
+# Usage: _mac_ops_is_bundle_id_name <name>
+# -----------------------------------------------------------------------------
+_mac_ops_is_bundle_id_name() {
+  [[ "${1}" =~ ${_MAC_OPS_BUNDLE_ID_RE} ]]
+}
+
+# -----------------------------------------------------------------------------
 # Orphan app data cleanup main function
 # 1. Extract bundle IDs of installed apps from /Applications, ~/Applications,
 #    Spotlight (mdfind), Homebrew Cask, and LaunchDaemons/Agents
@@ -268,7 +287,7 @@ _mac_ops_scan_directory() {
 
     # Bundle ID pattern matching (com.xxx.xxx or org.xxx.xxx, etc.)
     # Reverse domain format with at least 2 dots (.)
-    if [[ ! "${item_name}" =~ ^[a-zA-Z][a-zA-Z0-9-]*\.[a-zA-Z][a-zA-Z0-9-]*\..+ ]]; then
+    if ! _mac_ops_is_bundle_id_name "${item_name}"; then
       continue
     fi
 
@@ -384,7 +403,7 @@ _mac_ops_scan_preferences() {
     file_name=$(basename "${plist_file}" .plist)
 
     # Bundle ID pattern matching
-    if [[ ! "${file_name}" =~ ^[a-zA-Z][a-zA-Z0-9-]*\.[a-zA-Z][a-zA-Z0-9-]*\..+ ]]; then
+    if ! _mac_ops_is_bundle_id_name "${file_name}"; then
       continue
     fi
 
