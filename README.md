@@ -74,7 +74,7 @@ Pure zsh. No Python, no Ruby, no Node.js. Only macOS built-in tools (`zsh`, `plu
 | `tmp` | Clean `/tmp`, `/private/var/folders`, CrashReporter |
 | `log` | Clean `~/Library/Logs`, system diagnostic reports |
 | `zombie` | Detect and terminate zombie processes |
-| `orphan` | Detect and terminate orphan processes |
+| `orphan` | Report orphan process candidates (sends SIGTERM only with `MAC_OPS_ORPHAN_ACTION=term`, never SIGKILL) |
 | `orphan-app` | Clean residual files from deleted applications |
 | `brew` | Clean Homebrew caches and outdated downloads |
 | `dev` | Clean Xcode, npm, yarn, pnpm, pip, Gradle caches |
@@ -192,12 +192,29 @@ You can customize cleanup behavior by setting environment variables:
 export MAC_OPS_CACHE_MAX_AGE_DAYS=30   # Delete caches older than N days (default: 30)
 export MAC_OPS_CACHE_RECENT_DAYS=7     # Protect caches used within N days (default: 7)
 
+# Orphan process settings
+export MAC_OPS_ORPHAN_ACTION=report          # report (default): list candidates only, term: send SIGTERM to candidates
+export MAC_OPS_ORPHAN_MIN_RUNNING_HOURS=24   # Only consider processes running N hours or more (default: 24)
+
 # Example: More aggressive cache cleanup
 MAC_OPS_CACHE_MAX_AGE_DAYS=30 mac-ops run --module=cache
 
 # Example: Protect only very recent caches
 MAC_OPS_CACHE_RECENT_DAYS=1 mac-ops run --module=cache
 ```
+
+### Orphan Processes
+
+The `orphan` module reports by default and never ends a process unless you set `MAC_OPS_ORPHAN_ACTION=term`. A process is a candidate only if all of these hold:
+
+- its parent is PID 1 and it is owned by the current user
+- it is not managed by launchd (its PID is not in `launchctl list`)
+- it has no controlling terminal and its executable is not inside a `.app` bundle
+- neither it nor any ancestor or descendant is a terminal, shell, tmux, or coding-agent session
+- it is not part of mac-ops' own process tree and is not security software
+- it passes the system path, protected process, and ignore file rules, and has run for `MAC_OPS_ORPHAN_MIN_RUNNING_HOURS` or more
+
+Each candidate is logged with its PID, uptime, memory, executable, and the checks it passed. All name rules compare the executable, not the command-line arguments. With `MAC_OPS_ORPHAN_ACTION=term`, the PID is re-checked right before the signal (same start time, same executable) and only SIGTERM is sent, never SIGKILL.
 
 ### Ignore File
 
