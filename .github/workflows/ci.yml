@@ -17,6 +17,7 @@ jobs:
           zsh tests/test-trash.zsh
           zsh tests/test-safety.zsh
           zsh tests/test-modules.zsh
+          zsh tests/test-file-cleanup.zsh
 
   lint:
     runs-on: ubuntu-latest

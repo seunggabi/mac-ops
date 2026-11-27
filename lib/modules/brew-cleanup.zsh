@@ -14,6 +14,12 @@ mac_ops_brew_cleanup() {
     return 0
   fi
 
+  # Another brew process is using the cache (install/upgrade in progress)
+  if _mac_ops_fc_manager_running "brew"; then
+    mac_ops_log_debug "Protected, skipped (brew-cleanup): Homebrew cache (reason: brew is running)"
+    return 0
+  fi
+
   mac_ops_log_info "Starting Homebrew cleanup..."
 
   local cache_dir
