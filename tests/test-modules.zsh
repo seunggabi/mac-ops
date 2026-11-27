@@ -185,6 +185,174 @@ done
 print ""
 
 # =============================================================================
+# test_orphan_app_hardening
+# Settings and data are reported instead of moved, a recently modified inner
+# file protects an entry, security software is never touched, and a run without
+# Spotlight results is report-only.
+#
+# Every scan below runs with dry-run OFF, so it happens inside a subshell that
+# only ever sees fixture directories under TEST_TMPDIR. The dry-run flag of this
+# test process is never changed. Results are asserted from the file system and
+# the log file.
+# =============================================================================
+print "[TEST] test_orphan_app_hardening"
+
+# --- Bundle ID pattern refinements ---
+for _bid_name in "com.1password.1password" "org.7-zip.7zip" "com.foo_bar.app"; do
+  _mac_ops_is_bundle_id_name "${_bid_name}"
+  assert_exit_code "$?" "0" "bundle ID name: ${_bid_name}"
+done
+for _bid_name in "com.foo.bar baz" "a.b. " "com.foo." "1com.foo.bar"; do
+  _mac_ops_is_bundle_id_name "${_bid_name}"
+  assert_exit_code "$?" "1" "not a bundle ID name: '${_bid_name}'"
+done
+
+# --- Security software keyword safelist (case-insensitive, anywhere in the name) ---
+local _kw_name
+for _kw_name in "com.Fortinet.FortiClient" "com.wizvera.delfino" "net.nprotect.online" \
+  "com.example.TouchEnKey" "com.AhnLab.v3" "com.example.ASTxHelper" "kr.veraport.agent" "com.example.PCAssist.agent"; do
+  _mac_ops_is_security_keyword_name "${_kw_name}"
+  assert_exit_code "$?" "0" "security keyword name: ${_kw_name}"
+done
+for _kw_name in "com.example.app" "org.mozilla.firefox" "com.macopstest.orphan"; do
+  _mac_ops_is_security_keyword_name "${_kw_name}"
+  assert_exit_code "$?" "1" "not a security keyword name: ${_kw_name}"
+done
+
+# --- Fixture helpers ---
+local _oa_fx="${TEST_TMPDIR}/orphan-app-fixture"
+local _oa_log="${MAC_OPS_LOG_DIR}/mac-ops.log"
+local _oa_old_stamp
+_oa_old_stamp=$(date -v-30d '+%Y%m%d%H%M')
+
+# Create <dir>/sub/deep/data.bin with every level back-dated 30 days
+_oa_make_dir_entry() {
+  mkdir -p "${1}/sub/deep"
+  print -- "data" > "${1}/sub/deep/data.bin"
+  touch -t "${_oa_old_stamp}" "${1}/sub/deep/data.bin" "${1}/sub/deep" "${1}/sub" "${1}"
+}
+
+# Run one scanner against one fixture directory with dry-run off.
+# Usage: _oa_scan <data_action> <report_only> <scan_dir>
+# Writes the cleaned-item counter of the run to <fixture>/last-count.
+_oa_scan() {
+  (
+    [[ "${3}" == "${TEST_TMPDIR}/"* && "${MAC_OPS_TRASH_DIR}" == "${TEST_TMPDIR}/"* ]] || exit 99
+    MAC_OPS_DRY_RUN=false
+    MAC_OPS_ORPHAN_APP_DATA_ACTION="${1}"
+    _MAC_OPS_ORPHAN_APP_REPORT_ONLY="${2}"
+    typeset -gA _MAC_OPS_INSTALLED_BUNDLES _MAC_OPS_RUNNING_BUNDLES
+    _MAC_OPS_INSTALLED_BUNDLES=(com.macopstest.installed 1)
+    _MAC_OPS_RUNNING_BUNDLES=()
+    MAC_OPS_CLEANED_COUNT=0
+    if [[ "${3}" == *"/Preferences" ]]; then
+      _mac_ops_scan_preferences "${3}"
+    else
+      _mac_ops_scan_directory "${3}"
+    fi
+    print -- "${MAC_OPS_CLEANED_COUNT}" > "${_oa_fx}/last-count"
+  ) >/dev/null 2>&1
+}
+
+# Run the whole module against one fixture directory with dry-run off and
+# Spotlight replaced by a stub that prints <mdfind_output> (empty = no results).
+# Usage: _oa_run_module <mdfind_output> <scan_dir>
+_oa_run_module() {
+  (
+    [[ "${2}" == "${TEST_TMPDIR}/"* && "${MAC_OPS_TRASH_DIR}" == "${TEST_TMPDIR}/"* ]] || exit 99
+    local _oa_mdfind_output="${1}"
+    mdfind() { [[ -n "${_oa_mdfind_output}" ]] && print -- "${_oa_mdfind_output}"; return 0 }
+    MAC_OPS_ORPHAN_APP_SCAN_DIRS=("${2}")
+    MAC_OPS_ORPHAN_APP_DATA_ACTION=report
+    MAC_OPS_DRY_RUN=false
+    mac_ops_orphan_app_cleanup
+  ) >/dev/null 2>&1
+}
+
+_oa_exists() { [[ -e "${1}" ]] && print -- "yes" || print -- "no" }
+_oa_in_trash() { [[ -n "$(find "${MAC_OPS_TRASH_DIR}" -name "${1}" -print -quit 2>/dev/null)" ]] && print -- "yes" || print -- "no" }
+_oa_logged() { grep -q -- "${1}" "${_oa_log}" 2>/dev/null && print -- "yes" || print -- "no" }
+
+mkdir -p "${_oa_fx}"
+
+# --- Data location: reported and not moved by default ---
+local _oa_item="${_oa_fx}/report/Application Support/com.macopstest.reportdefault"
+_oa_make_dir_entry "${_oa_item}"
+_oa_scan report false "${_oa_fx}/report/Application Support"
+assert_eq "$(_oa_exists "${_oa_item}")" "yes" "data location orphan is not moved by default"
+assert_eq "$(cat "${_oa_fx}/last-count" 2>/dev/null)" "0" "reported orphan is not counted as cleaned"
+assert_eq "$(_oa_logged "reported, not moved: .*com.macopstest.reportdefault")" "yes" "data location orphan is reported in the log"
+assert_eq "$(_oa_logged "com.macopstest.reportdefault .*checks passed: not installed, not running, not safelisted, older than")" "yes" "report explains which checks the entry passed"
+
+# An unknown value of the setting must behave like the default
+_oa_scan "delete-everything" false "${_oa_fx}/report/Application Support"
+assert_eq "$(_oa_exists "${_oa_item}")" "yes" "data location orphan is not moved with an unknown action value"
+
+# --- Data location: moved when the user opts in ---
+_oa_item="${_oa_fx}/optin/Application Support/com.macopstest.trashoptin"
+_oa_make_dir_entry "${_oa_item}"
+_oa_scan trash false "${_oa_fx}/optin/Application Support"
+assert_eq "$(_oa_exists "${_oa_item}")" "no" "data location orphan is moved with DATA_ACTION=trash"
+assert_eq "$(_oa_in_trash "com.macopstest.trashoptin")" "yes" "opted-in data location orphan is in the trash"
+assert_eq "$(cat "${_oa_fx}/last-count" 2>/dev/null)" "1" "moved orphan is counted as cleaned"
+
+# --- Preferences: same rule for plist files ---
+_oa_item="${_oa_fx}/prefs/Preferences/com.macopstest.prefdefault.plist"
+mkdir -p "${_oa_fx}/prefs/Preferences"
+print -- "data" > "${_oa_item}"
+touch -t "${_oa_old_stamp}" "${_oa_item}"
+_oa_scan report false "${_oa_fx}/prefs/Preferences"
+assert_eq "$(_oa_exists "${_oa_item}")" "yes" "orphan preference is not moved by default"
+assert_eq "$(_oa_logged "reported, not moved: .*com.macopstest.prefdefault.plist")" "yes" "orphan preference is reported in the log"
+_oa_scan trash false "${_oa_fx}/prefs/Preferences"
+assert_eq "$(_oa_exists "${_oa_item}")" "no" "orphan preference is moved with DATA_ACTION=trash"
+
+# --- Cache location: still moved by default ---
+_oa_item="${_oa_fx}/cache/Caches/com.macopstest.cacheorphan"
+_oa_make_dir_entry "${_oa_item}"
+_oa_scan report false "${_oa_fx}/cache/Caches"
+assert_eq "$(_oa_exists "${_oa_item}")" "no" "cache location orphan is still moved by default"
+assert_eq "$(_oa_logged "com.macopstest.cacheorphan .*checks passed: not installed, not running, not safelisted, older than")" "yes" "move explains which checks the entry passed"
+
+# --- A recently modified file deep inside protects the entry ---
+_oa_item="${_oa_fx}/recent/Caches/com.macopstest.recentinner"
+_oa_make_dir_entry "${_oa_item}"
+touch "${_oa_item}/sub/deep/data.bin"
+touch -t "${_oa_old_stamp}" "${_oa_item}/sub/deep" "${_oa_item}/sub" "${_oa_item}"
+_oa_scan report false "${_oa_fx}/recent/Caches"
+assert_eq "$(_oa_exists "${_oa_item}")" "yes" "entry with a recently modified inner file is not moved"
+
+# --- Security software keyword protects the entry ---
+_oa_item="${_oa_fx}/security/Caches/com.macopstest.astxhelper"
+_oa_make_dir_entry "${_oa_item}"
+_oa_scan trash false "${_oa_fx}/security/Caches"
+assert_eq "$(_oa_exists "${_oa_item}")" "yes" "entry with a security software keyword is not moved"
+
+# --- Report-only run: nothing is moved, not even from a cache location ---
+_oa_item="${_oa_fx}/reportonly/Caches/com.macopstest.reportonly"
+_oa_make_dir_entry "${_oa_item}"
+_oa_scan trash true "${_oa_fx}/reportonly/Caches"
+assert_eq "$(_oa_exists "${_oa_item}")" "yes" "report-only run does not move a cache location orphan"
+
+# --- Whole module: Spotlight returning nothing makes the run report-only ---
+_oa_item="${_oa_fx}/nospotlight/Caches/com.macopstest.nospotlight"
+_oa_make_dir_entry "${_oa_item}"
+_oa_run_module "" "${_oa_fx}/nospotlight/Caches"
+assert_eq "$(_oa_exists "${_oa_item}")" "yes" "run without Spotlight results does not move a cache location orphan"
+assert_eq "$(_oa_logged "Spotlight (mdfind) returned no applications")" "yes" "run without Spotlight results logs a warning"
+assert_eq "$(_oa_logged "reported, not moved: .*com.macopstest.nospotlight")" "yes" "run without Spotlight results still reports the orphan"
+
+# --- Whole module: with Spotlight results the cache location orphan is moved ---
+_oa_item="${_oa_fx}/spotlight/Caches/com.macopstest.withspotlight"
+_oa_make_dir_entry "${_oa_item}"
+_oa_run_module "/System/Applications/Calculator.app" "${_oa_fx}/spotlight/Caches"
+assert_eq "$(_oa_exists "${_oa_item}")" "no" "run with Spotlight results moves a cache location orphan"
+
+unfunction _oa_make_dir_entry _oa_scan _oa_run_module _oa_exists _oa_in_trash _oa_logged
+
+print ""
+
+# =============================================================================
 # test_brew_cleanup_dryrun
 # =============================================================================
 print "[TEST] test_brew_cleanup_dryrun"

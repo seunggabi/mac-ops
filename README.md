@@ -197,6 +197,13 @@ MAC_OPS_CACHE_MAX_AGE_DAYS=30 mac-ops run --module=cache
 
 # Example: Protect only very recent caches
 MAC_OPS_CACHE_RECENT_DAYS=1 mac-ops run --module=cache
+
+# Orphan app data settings
+export MAC_OPS_ORPHAN_APP_GRACE_DAYS=7          # Skip entries modified (or holding a file modified) within N days (default: 7)
+export MAC_OPS_ORPHAN_APP_DATA_ACTION=report    # Orphans in settings/data locations: report (default) or trash
+
+# Example: Preview what opting in to moving orphan settings/data would do
+MAC_OPS_ORPHAN_APP_DATA_ACTION=trash mac-ops run --module=orphan-app --dry-run
 ```
 
 ### Ignore File
