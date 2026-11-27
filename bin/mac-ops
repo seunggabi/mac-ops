@@ -272,6 +272,7 @@ _mac_ops_cmd_status() {
   else
     print "Status: Not installed"
   fi
+  _mac_ops_report_agents
 }
 
 # =============================================================================
@@ -309,13 +310,55 @@ _mac_ops_cmd_purge() {
 }
 
 # =============================================================================
-# install command
+# launchd agent helpers
 # =============================================================================
-_mac_ops_cmd_install() {
-  local plist_src="${MAC_OPS_ROOT}/launchd/com.mac-ops.cleanup.plist"
-  local plist_dst="${HOME}/Library/LaunchAgents/com.mac-ops.cleanup.plist"
-  local bin_path="${MAC_OPS_ROOT}/bin/mac-ops"
+
+# -----------------------------------------------------------------------------
+# Path of the mac-ops executable to write into a launchd plist.
+# Usage: _mac_ops_agent_bin_path [resolved_script_path]
+#
+# A Homebrew install runs from <prefix>/Cellar/<formula>/<version>/libexec/...,
+# and that directory is deleted by "brew upgrade". An agent registered with it
+# keeps failing silently after the upgrade. When the script lives in a Cellar,
+# use the version-independent <prefix>/opt/<formula>/... path instead (or the
+# <prefix>/bin/mac-ops wrapper). Any other install keeps the resolved path.
+# -----------------------------------------------------------------------------
+_mac_ops_agent_bin_path() {
+  local resolved="${1:-${MAC_OPS_ROOT}/bin/mac-ops}"
+
+  if [[ "${resolved}" == */Cellar/*/*/libexec/bin/mac-ops ]]; then
+    local prefix="${resolved%%/Cellar/*}"
+    local rest="${resolved#*/Cellar/}"
+    local formula="${rest%%/*}"
+    local stable="${prefix}/opt/${formula}/libexec/bin/mac-ops"
+    local wrapper="${prefix}/bin/mac-ops"
+
+    if [[ -x "${stable}" ]]; then
+      print -r -- "${stable}"
+      return 0
+    fi
+    if [[ -x "${wrapper}" ]]; then
+      print -r -- "${wrapper}"
+      return 0
+    fi
+  fi
+
+  print -r -- "${resolved}"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Render a launchd plist template and (re)register the agent.
+# Usage: _mac_ops_install_agent <template_name>
+# Sets REPLY to the executable path written into the plist.
+# -----------------------------------------------------------------------------
+_mac_ops_install_agent() {
+  local plist_name="${1}"
+  local plist_src="${MAC_OPS_ROOT}/launchd/${plist_name}"
+  local plist_dst="${HOME}/Library/LaunchAgents/${plist_name}"
   local home_path="${HOME}/.mac-ops"
+  local bin_path
+  bin_path=$(_mac_ops_agent_bin_path)
 
   if [[ ! -f "${plist_src}" ]]; then
     mac_ops_log_error "plist template not found: ${plist_src}"
@@ -325,17 +368,77 @@ _mac_ops_cmd_install() {
   # 1. Ensure LaunchAgents directory
   mkdir -p "${HOME}/Library/LaunchAgents" 2>/dev/null || true
 
-  # 2. Copy plist and replace placeholders
+  # 2. Unload a previously registered agent first: launchd keeps the old
+  #    definition (and its old executable path) if the label is still loaded
+  if [[ -f "${plist_dst}" ]]; then
+    launchctl unload "${plist_dst}" 2>/dev/null || true
+  fi
+
+  # 3. Copy plist and replace placeholders
   sed -e "s|REPLACEME_MAC_OPS_BIN|${bin_path}|g" \
       -e "s|REPLACEME_MAC_OPS_HOME|${home_path}|g" \
       "${plist_src}" > "${plist_dst}"
 
-  # 3. launchctl load
+  # 4. launchctl load
   launchctl load "${plist_dst}" 2>/dev/null || true
 
-  mac_ops_log_info "launchd agent installed: ${plist_dst}"
+  REPLY="${bin_path}"
+  return 0
+}
 
-  # 4. FDA permission guide
+# -----------------------------------------------------------------------------
+# Report installed agent plists and whether their executable still exists.
+# Read-only. Usage: _mac_ops_report_agents
+# -----------------------------------------------------------------------------
+_mac_ops_report_agents() {
+  local agent_dir="${HOME}/Library/LaunchAgents"
+  local label fix_cmd plist target
+  local found=0
+
+  for label in cleanup monitor; do
+    plist="${agent_dir}/com.mac-ops.${label}.plist"
+    [[ -f "${plist}" ]] || continue
+    found=$((found + 1))
+
+    if [[ "${label}" == "monitor" ]]; then
+      fix_cmd="mac-ops monitor setup"
+    else
+      fix_cmd="mac-ops install"
+    fi
+
+    target=$(plutil -extract ProgramArguments.0 raw -o - "${plist}" 2>/dev/null) || target=""
+
+    if [[ -z "${target}" ]]; then
+      print "com.mac-ops.${label}: BROKEN - cannot read the program path from ${plist}"
+      print "  Fix: ${fix_cmd}"
+    elif [[ ! -x "${target}" ]]; then
+      print "com.mac-ops.${label}: BROKEN - plist points at a file that does not exist:"
+      print "  ${target}"
+      print "  The agent fails silently on every run. Fix: ${fix_cmd}"
+    else
+      print "com.mac-ops.${label}: OK -> ${target}"
+    fi
+  done
+
+  if [[ ${found} -eq 0 ]]; then
+    print "No agent plist in ${agent_dir}"
+  fi
+  return 0
+}
+
+# =============================================================================
+# install command
+# =============================================================================
+_mac_ops_cmd_install() {
+  if ! _mac_ops_install_agent "com.mac-ops.cleanup.plist"; then
+    return 1
+  fi
+  local bin_path="${REPLY}"
+  local plist_dst="${HOME}/Library/LaunchAgents/com.mac-ops.cleanup.plist"
+
+  mac_ops_log_info "launchd agent installed: ${plist_dst} (runs ${bin_path})"
+
+  # FDA permission guide
   print ""
   print "========================================================"
   print " FDA (Full Disk Access) permission is required."
@@ -403,20 +506,10 @@ _mac_ops_cmd_monitor() {
       mac_ops_log_info "Monitor snapshot collected"
       ;;
     setup)
-      local plist_src="${MAC_OPS_ROOT}/launchd/com.mac-ops.monitor.plist"
-      local plist_dst="${HOME}/Library/LaunchAgents/com.mac-ops.monitor.plist"
-      local bin_path="${MAC_OPS_ROOT}/bin/mac-ops"
-      local home_path="${HOME}/.mac-ops"
-      if [[ ! -f "${plist_src}" ]]; then
-        mac_ops_log_error "plist template not found: ${plist_src}"
+      if ! _mac_ops_install_agent "com.mac-ops.monitor.plist"; then
         return 1
       fi
-      mkdir -p "${HOME}/Library/LaunchAgents" 2>/dev/null || true
-      sed -e "s|REPLACEME_MAC_OPS_BIN|${bin_path}|g" \
-          -e "s|REPLACEME_MAC_OPS_HOME|${home_path}|g" \
-          "${plist_src}" > "${plist_dst}"
-      launchctl load "${plist_dst}" 2>/dev/null || true
-      mac_ops_log_info "Monitor launchd agent installed (every 5 min): ${plist_dst}"
+      mac_ops_log_info "Monitor launchd agent installed (every 5 min): ${HOME}/Library/LaunchAgents/com.mac-ops.monitor.plist (runs ${REPLY})"
       ;;
     unsetup)
       local plist_path="${HOME}/Library/LaunchAgents/com.mac-ops.monitor.plist"
@@ -486,6 +579,13 @@ _mac_ops_main() {
         monitor_subcmd=("$@")
         set --  # clear positional params to end the while loop
         ;;
+      __agent-bin-path)
+        # Internal (tests): print the path install would write for <script>
+        command="__agent-bin-path"
+        shift
+        restore_path="${1:-}"
+        set --
+        ;;
       restore)
         command="restore"
         shift
@@ -553,6 +653,9 @@ _mac_ops_main() {
       ;;
     purge)
       _mac_ops_cmd_purge
+      ;;
+    __agent-bin-path)
+      _mac_ops_agent_bin_path "${restore_path}"
       ;;
     install)
       _mac_ops_cmd_install

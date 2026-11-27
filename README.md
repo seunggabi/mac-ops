@@ -168,6 +168,12 @@ mac-ops purge
 mac-ops status
 ```
 
+`mac-ops status` shows two trash figures: the indexed total (moved to trash, **pending purge** - that space is not reclaimed until the items are purged) and what the trash directory really occupies on disk. `mac-ops purge` logs the measured change in free space (`df`) next to the indexed size, because a `du` figure is not always reclaimable space (APFS clones share blocks).
+
+Before every purge the trash is reconciled with its index: an item that is on disk but missing from the index is re-indexed with its own change time as the trashed time, so it expires after the normal 72 hours instead of staying on disk forever. Stale `.index.json.tmp.*` files (older than one hour) are removed. Nothing unindexed is deleted on sight.
+
+Moves into the trash are all-or-nothing: a same-volume move is a single atomic rename; if a rename is not possible the copy is verified (entry count and total size) before the source is removed, and on any failure the source stays untouched and the partial copy is removed. A directory that a running process has files open in is skipped (checked against one cached `lsof` list per run; set `MAC_OPS_TRASH_SKIP_OPEN_DIRS=false` to disable).
+
 ### Miscellaneous
 
 ```bash
@@ -253,6 +259,8 @@ mac-ops install
 # Uninstall
 mac-ops uninstall
 ```
+
+With a Homebrew install the agent is registered with the version-independent `$(brew --prefix)/opt/mac-ops/libexec/bin/mac-ops` path, so it keeps working after `brew upgrade mac-ops`. `mac-ops status` reports an installed plist that points at a file that no longer exists (for example one registered by an older version with a `Cellar/mac-ops/<version>` path) together with the command that fixes it: `mac-ops install` or `mac-ops monitor setup`.
 
 ### Method 2: crontab
 
