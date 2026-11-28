@@ -910,6 +910,23 @@ test_trash_move_vanished_source() {
     done
     assert_eq "${n}/$([[ -e "${base}/Caches/com.example.shared" ]] && print left || print moved)" "1/moved" "parallel moves of the same directory: moved once"
 
+    # Parent not searchable (chmod 000, like a TCC denial): the item is not
+    # "vanished", it cannot be reached - still an ERROR
+    mkdir -p "${base}/locked/item"; print x > "${base}/locked/item/f"
+    chmod 000 "${base}/locked"
+    _mac_ops_trash_source_vanished "${base}/locked/item"
+    assert_eq "$?" "1" "unsearchable parent: not treated as vanished"
+    _mac_ops_trash_source_vanished "${base}/gone"
+    assert_eq "$?" "0" "missing item in a searchable parent: vanished"
+    mac_ops_log_line_count; start="${REPLY}"
+    rc=0; out=$(mac_ops_trash_move "${base}/locked/item" "test" "cache-cleanup" 2>&1) || rc=$?
+    chmod 755 "${base}/locked"
+    assert_eq "${rc}" "1" "unsearchable parent: not moved"
+    assert_output_not_contains "${out}" "Skipped, no longer exists" "unsearchable parent: not logged as a skip"
+    mac_ops_log_count_since "${start}" ERROR
+    assert_eq "${REPLY}" "1" "unsearchable parent: still an ERROR"
+    assert_eq "$(cat "${base}/locked/item/f" 2>/dev/null)" "x" "unsearchable parent: item left in place"
+
     # A genuine failure (source still there) is not masked
     mkdir -p "${base}/stuck"; print x > "${base}/stuck/f"
     mac_ops_log_line_count; start="${REPLY}"

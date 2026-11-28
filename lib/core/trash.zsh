@@ -875,6 +875,18 @@ _mac_ops_migrate_plist_to_index() {
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# Did a move source vanish (moved or removed by someone else since it was
+# selected)? Only when nothing is at the path AND its parent directory
+# exists and is searchable: "! -e" is also true when the parent cannot be
+# searched (chmod 000, a TCC denial), which stays an error.
+# Usage: _mac_ops_trash_source_vanished <path>
+# -----------------------------------------------------------------------------
+_mac_ops_trash_source_vanished() {
+  local parent="${1:h}"
+  [[ ! -e "${1}" && ! -L "${1}" && -d "${parent}" && -x "${parent}" ]]
+}
+
+# -----------------------------------------------------------------------------
 # Atomic rename. Uses zsh's zf_mv, which is a plain rename(2): it either moves
 # the whole entry or fails, and never degrades to copy + delete the way
 # /bin/mv does when the rename is not possible.
@@ -1270,7 +1282,11 @@ mac_ops_trash_move() {
   # selected (cache-cleanup and orphan-app can select the same cache
   # directory in parallel): a skip, not a run error
   if [[ ! -e "${source_path}" ]]; then
-    mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${source_path} (module: ${module_name})"
+    if _mac_ops_trash_source_vanished "${source_path}"; then
+      mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${source_path} (module: ${module_name})"
+    else
+      mac_ops_log_error "Source does not exist or cannot be reached (parent directory missing or not searchable): ${source_path}"
+    fi
     return 1
   fi
 
@@ -1278,7 +1294,7 @@ mac_ops_trash_move() {
   local abs_source
   abs_source=$(cd "$(dirname "${source_path}")" 2>/dev/null && print -- "${PWD}/$(basename "${source_path}")") || abs_source=""
   if [[ -z "${abs_source}" ]]; then
-    if [[ ! -e "${source_path}" && ! -L "${source_path}" ]]; then
+    if _mac_ops_trash_source_vanished "${source_path}"; then
       mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${source_path} (module: ${module_name})"
       return 1
     fi
@@ -1302,7 +1318,7 @@ mac_ops_trash_move() {
         return 1
         ;;
       unknown)
-        if [[ ! -e "${abs_source}" && ! -L "${abs_source}" ]]; then
+        if _mac_ops_trash_source_vanished "${abs_source}"; then
           mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${abs_source} (module: ${module_name})"
           return 1
         fi
@@ -1381,14 +1397,14 @@ mac_ops_trash_move() {
   _mac_ops_index_unlock
   # The rename failed because the source vanished meanwhile (another module
   # moved it): a skip. Anything else is a real failure below.
-  if [[ ! -e "${abs_source}" && ! -L "${abs_source}" ]]; then
+  if _mac_ops_trash_source_vanished "${abs_source}"; then
     mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${abs_source} (module: ${module_name})"
     return 1
   fi
   mac_ops_log_debug "Rename not possible, falling back to verified copy: ${abs_source}"
 
   if ! _mac_ops_trash_copy_verified "${abs_source}"; then
-    if [[ ! -e "${abs_source}" && ! -L "${abs_source}" ]]; then
+    if _mac_ops_trash_source_vanished "${abs_source}"; then
       mac_ops_log_info "Skipped, no longer exists (moved or removed while it was being copied): ${abs_source} (module: ${module_name})"
       return 1
     fi
