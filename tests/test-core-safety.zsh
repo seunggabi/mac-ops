@@ -1011,10 +1011,20 @@ test_failure_notification() {
     _t12_run_end "${start}" 1
     assert_output_contains "$(cat "${OSA_CALLS}")" "Run failed (exit status 1)" "non-zero exit: notification sent"
 
-    # Interactive (not scheduled) runs never call osascript
+    # Interactive (not scheduled) runs: a failed one is notified too, a
+    # successful one is not (its output is on the terminal)
     : > "${OSA_CALLS}"
     MAC_OPS_SCHEDULED=false mac_ops_notify_run_end 0 1 >/dev/null 2>&1
-    assert_eq "$(grep -c . "${OSA_CALLS}")" "0" "interactive run: no notification"
+    assert_output_contains "$(cat "${OSA_CALLS}")" "Run failed (exit status 1)" "failed interactive run: notification sent"
+    : > "${OSA_CALLS}"
+    mac_ops_log_line_count; start="${REPLY}"
+    MAC_OPS_CLEANED_COUNT=3 MAC_OPS_SCHEDULED=false mac_ops_notify_run_end "${start}" 0 >/dev/null 2>&1
+    assert_eq "$(grep -c . "${OSA_CALLS}")" "0" "successful interactive run: no notification"
+    : > "${OSA_CALLS}"
+    mac_ops_log_line_count; start="${REPLY}"
+    ( MAC_OPS_SCHEDULED=false; mac_ops_log_error "manual failure" )
+    MAC_OPS_SCHEDULED=false mac_ops_notify_run_end "${start}" 0 >/dev/null 2>&1
+    assert_output_contains "$(cat "${OSA_CALLS}")" "Mac-Ops Run Had Errors" "interactive run with an ERROR: notification sent"
 }
 
 test_failure_notification
@@ -1467,9 +1477,72 @@ test_health_ok() {
     assert_output_contains "${out%%$'\n'*}" "com.mac-ops.cleanup is installed but not loaded" "unloaded agent: alert on the first line"
 }
 
+# No run recorded: the first line says so
+test_health_no_runs() {
+    _tc_reset
+    local out
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_eq "${out%%$'\n'*}" "[INFO] no runs recorded yet (${MAC_OPS_HOME}/runs)" "no runs: the first line says so"
+    # With an alert (agent not loaded), the alert line names it too
+    TC_LOADED=""
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_output_contains "${out%%$'\n'*}" "[ALERT]" "no runs + unloaded agent: alert first"
+    assert_output_contains "${out%%$'\n'*}" "no runs recorded yet" "no runs + unloaded agent: alert line says no runs recorded"
+}
+
+# Run lock: holder PID and age in status; a lock older than one interval is
+# alerted (hung run) and makes a skipped scheduled run a WARN
+test_health_run_lock() {
+    _tc_reset
+    _tc_manifest 600 true 0
+    local me_start out lock_log
+    me_start=$(_tl_start_of $$)
+    rm -f -- "${MAC_OPS_LOCK_FILE}"
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_output_contains "${out}" "Run lock:         none" "no lock file: run lock none"
+
+    print -r -- "$$ ${me_start}" > "${MAC_OPS_LOCK_FILE}"
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_output_contains "${out}" "Run lock:         held by PID $$ for 0m" "fresh lock: holder PID and age shown"
+    assert_eq "${out%%$'\n'*}" "=== Health ===" "fresh lock: no alert"
+
+    touch -t "$(date -v-2H '+%Y%m%d%H%M')" "${MAC_OPS_LOCK_FILE}"
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_output_contains "${out}" "Run lock:         held by PID $$ for 2h" "old lock: holder PID and age shown"
+    assert_output_contains "${out%%$'\n'*}" "[ALERT] a run (PID $$) has held the run lock for 2h, more than one interval (60m)" "lock older than one interval: alert on the first line"
+
+    # Skipped run logging (the decision bin/mac-ops makes on lock_rc 1)
+    mkdir -p "${MAC_OPS_LOG_DIR}"
+    : > "${MAC_OPS_LOG_FILE}"
+    ( MAC_OPS_SCHEDULED=true; mac_ops_run_log_lock_skip "${TC_AGENTS}" ) >/dev/null 2>&1
+    lock_log=$(cat "${MAC_OPS_LOG_FILE}")
+    assert_output_contains "${lock_log}" "[WARN] Scheduled run skipped: another mac-ops run (PID $$, lock held for 2h) has held the run lock for more than one interval (60m)" "scheduled run skipped by an old lock: WARN with PID and age"
+    : > "${MAC_OPS_LOG_FILE}"
+    ( MAC_OPS_SCHEDULED=false; mac_ops_run_log_lock_skip "${TC_AGENTS}" ) >/dev/null 2>&1
+    assert_output_contains "$(cat "${MAC_OPS_LOG_FILE}")" "[INFO] Another mac-ops run is in progress (PID $$, lock held for 2h), skipping this run" "manual run skipped by an old lock: INFO"
+    touch "${MAC_OPS_LOCK_FILE}"
+    : > "${MAC_OPS_LOG_FILE}"
+    ( MAC_OPS_SCHEDULED=true; mac_ops_run_log_lock_skip "${TC_AGENTS}" ) >/dev/null 2>&1
+    lock_log=$(cat "${MAC_OPS_LOG_FILE}")
+    assert_output_contains "${lock_log}" "[INFO] Another mac-ops run is in progress (PID $$, lock held for 0m)" "scheduled run skipped by a fresh lock: INFO"
+    assert_output_not_contains "${lock_log}" "[WARN]" "scheduled run skipped by a fresh lock: no WARN"
+
+    # Stale lock (PID gone): shown as stale, no hung-run alert
+    print -r -- "999999 12345" > "${MAC_OPS_LOCK_FILE}"
+    touch -t "$(date -v-5H '+%Y%m%d%H%M')" "${MAC_OPS_LOCK_FILE}"
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_output_contains "${out}" "Run lock:         stale (PID 999999 is not running" "stale lock shown as stale"
+    assert_output_not_contains "${out}" "may be hung" "stale lock: no hung-run alert"
+    assert_eq "$(cat "${MAC_OPS_LOCK_FILE}")" "999999 12345" "status leaves the lock file untouched"
+    assert_eq "$([[ -e "${MAC_OPS_LOCK_FILE}.guard" ]] && print created || print none)" "none" "status creates no lock guard file"
+    rm -f -- "${MAC_OPS_LOCK_FILE}"
+}
+
 test_health_failed_scheduled_run
 test_health_stale_agent
 test_health_ok
+test_health_no_runs
+test_health_run_lock
 unset -f _mac_ops_agent_loaded
 rm -rf -- "${MAC_OPS_HOME}/runs" "${TC_AGENTS}"
 

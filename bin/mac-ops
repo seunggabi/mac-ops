@@ -141,7 +141,9 @@ _mac_ops_cmd_run() {
   local lock_rc=0
   mac_ops_acquire_lock || lock_rc=$?
   if [[ "${lock_rc}" == "1" ]]; then
-    mac_ops_log_info "Another mac-ops run is in progress, skipping this run"
+    # INFO; WARN for a scheduled run when the holder is older than one
+    # interval (it may be hung). Names the holder's PID and the lock age
+    mac_ops_run_log_lock_skip
     mac_ops_run_discard
     return 0
   elif [[ "${lock_rc}" != "0" ]]; then
@@ -187,8 +189,9 @@ _mac_ops_cmd_run() {
   # 13. System report (before/after comparison + cleanup summary)
   mac_ops_print_report "${snapshot_before}" "${snapshot_after}" "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}" "${MAC_OPS_DATA_MOVED_COUNT}"
 
-  # 14. Release lock, macOS notification (scheduled mode; also when ERRORs
-  #     were logged). Free bytes (df -k) are the second snapshot field
+  # 14. Release lock, macOS notification (a successful run only in scheduled
+  #     mode; a failed run - ERRORs logged or non-zero exit - also when run
+  #     by hand). Free bytes (df -k) are the second snapshot field
   local before_free after_free _pct _rest
   read -r _pct before_free _rest <<< "${snapshot_before}"
   read -r _pct after_free _rest <<< "${snapshot_after}"

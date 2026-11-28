@@ -53,7 +53,8 @@ mac_ops_run_start() {
 
 # -----------------------------------------------------------------------------
 # Finish the run once: remove the statistics directory, release the run lock
-# if this process holds it, notify (scheduled runs; a failed run always).
+# if this process holds it, notify (a successful run only when scheduled; a
+# failed run always, manual or scheduled).
 # Later calls do nothing.
 # Usage: mac_ops_run_finish <exit_status> [free_before_bytes] [free_after_bytes]
 # -----------------------------------------------------------------------------
@@ -461,10 +462,84 @@ _mac_ops_run_duration() {
 }
 
 # -----------------------------------------------------------------------------
+# Who holds the run lock? Read-only (never creates the lock or its guard).
+# Sets _MAC_OPS_LOCK_HOLDER_PID, _MAC_OPS_LOCK_HOLDER_AGE (seconds since the
+# lock file was written, "" when unknown) and _MAC_OPS_LOCK_HOLDER_LIVE
+# (true/false). Returns 1 when there is no lock file.
+# -----------------------------------------------------------------------------
+typeset -g _MAC_OPS_LOCK_HOLDER_PID="" _MAC_OPS_LOCK_HOLDER_AGE="" _MAC_OPS_LOCK_HOLDER_LIVE=false
+mac_ops_run_lock_holder() {
+  setopt LOCAL_OPTIONS NO_ERR_EXIT
+  _MAC_OPS_LOCK_HOLDER_PID="" _MAC_OPS_LOCK_HOLDER_AGE="" _MAC_OPS_LOCK_HOLDER_LIVE=false
+  [[ -n "${MAC_OPS_LOCK_FILE}" && -f "${MAC_OPS_LOCK_FILE}" ]] || return 1
+  if (( ${+functions[_mac_ops_lock_is_live]} )); then
+    if _mac_ops_lock_is_live; then
+      _MAC_OPS_LOCK_HOLDER_LIVE=true
+    fi
+    _MAC_OPS_LOCK_HOLDER_PID="${REPLY}"
+  else
+    local -a fields
+    fields=(${=$(cat -- "${MAC_OPS_LOCK_FILE}" 2>/dev/null)})
+    _MAC_OPS_LOCK_HOLDER_PID="${fields[1]:-}"
+  fi
+  local mtime
+  mtime=$(stat -f %m -- "${MAC_OPS_LOCK_FILE}" 2>/dev/null) || mtime=""
+  if [[ "${mtime}" =~ ^[0-9]+$ ]]; then
+    _MAC_OPS_LOCK_HOLDER_AGE=$(( $(date +%s) - mtime ))
+    (( _MAC_OPS_LOCK_HOLDER_AGE < 0 )) && _MAC_OPS_LOCK_HOLDER_AGE=0
+  fi
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Scheduling interval of the cleanup agent in seconds (REPLY): from the
+# installed plist, else the shipped template's StartInterval (3600).
+# Usage: _mac_ops_cleanup_interval [launch_agents_dir]
+# -----------------------------------------------------------------------------
+_mac_ops_cleanup_interval() {
+  local plist="${1:-${HOME}/Library/LaunchAgents}/com.mac-ops.cleanup.plist"
+  REPLY=""
+  [[ -f "${plist}" ]] && _mac_ops_agent_interval "${plist}"
+  [[ "${REPLY}" =~ ^[0-9]+$ && "${REPLY}" -gt 0 ]] || REPLY=3600
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Log a run skipped because another run holds the lock. A scheduled run
+# skipped by a lock older than one scheduling interval logs a WARN (the
+# holder may be hung: every scheduled run is skipped until it ends);
+# otherwise INFO. Both name the holder's PID and the lock's age.
+# Usage: mac_ops_run_log_lock_skip [launch_agents_dir]
+# -----------------------------------------------------------------------------
+mac_ops_run_log_lock_skip() {
+  setopt LOCAL_OPTIONS NO_ERR_EXIT
+  local holder="unknown PID" age_txt="" interval
+  if mac_ops_run_lock_holder; then
+    [[ -n "${_MAC_OPS_LOCK_HOLDER_PID}" ]] && holder="PID ${_MAC_OPS_LOCK_HOLDER_PID}"
+    if [[ -n "${_MAC_OPS_LOCK_HOLDER_AGE}" ]]; then
+      _mac_ops_run_duration "${_MAC_OPS_LOCK_HOLDER_AGE}"
+      age_txt=", lock held for ${REPLY}"
+    fi
+  fi
+  _mac_ops_cleanup_interval "${1:-}"; interval="${REPLY}"
+  if [[ "${MAC_OPS_SCHEDULED}" == "true" && -n "${_MAC_OPS_LOCK_HOLDER_AGE}" ]] \
+    && (( _MAC_OPS_LOCK_HOLDER_AGE > interval )); then
+    _mac_ops_run_duration "${interval}"
+    mac_ops_log_warn "Scheduled run skipped: another mac-ops run (${holder}${age_txt}) has held the run lock for more than one interval (${REPLY}); it may be hung - check: ps -p ${_MAC_OPS_LOCK_HOLDER_PID:-?}"
+  else
+    mac_ops_log_info "Another mac-ops run is in progress (${holder}${age_txt}), skipping this run"
+  fi
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # Print the health section of "mac-ops status". Read-only. When the last
 # scheduled run failed, the cleanup agent is installed but not loaded, or it
-# has not run for more than three intervals, the FIRST line printed is an
-# "[ALERT] ..." line saying so.
+# has not run for more than three intervals, or a run has held the run lock
+# for more than one interval (hung), the FIRST line printed is an
+# "[ALERT] ..." line saying so. With no run recorded at all, the first line
+# says that too (as part of the alert line, or as an "[INFO]" line).
+# The run lock line shows the holder's PID and how long it has held the lock.
 # Usage: mac_ops_run_health [launch_agents_dir]
 # -----------------------------------------------------------------------------
 mac_ops_run_health() {
@@ -531,8 +606,31 @@ mac_ops_run_health() {
     fi
   done
 
+  # Run lock holder (a hung run blocks every scheduled run)
+  local lock_line="none"
+  if mac_ops_run_lock_holder; then
+    local held="unknown time"
+    if [[ -n "${_MAC_OPS_LOCK_HOLDER_AGE}" ]]; then
+      _mac_ops_run_duration "${_MAC_OPS_LOCK_HOLDER_AGE}"; held="${REPLY}"
+    fi
+    if [[ "${_MAC_OPS_LOCK_HOLDER_LIVE}" == "true" ]]; then
+      lock_line="held by PID ${_MAC_OPS_LOCK_HOLDER_PID} for ${held}"
+      _mac_ops_cleanup_interval "${agent_dir}"; interval="${REPLY}"
+      if [[ -n "${_MAC_OPS_LOCK_HOLDER_AGE}" ]] && (( _MAC_OPS_LOCK_HOLDER_AGE > interval )); then
+        _mac_ops_run_duration "${interval}"
+        alerts+=("a run (PID ${_MAC_OPS_LOCK_HOLDER_PID}) has held the run lock for ${held}, more than one interval (${REPLY}): it may be hung and every scheduled run is skipped - check: ps -p ${_MAC_OPS_LOCK_HOLDER_PID}")
+      fi
+    else
+      lock_line="stale (PID ${_MAC_OPS_LOCK_HOLDER_PID:-none} is not running, written ${held} ago; removed by the next run)"
+    fi
+  fi
+
+  local no_runs="no runs recorded yet (${MAC_OPS_HOME}/runs)"
   if (( ${#alerts} )); then
+    (( ${#last} )) || alerts+=("${no_runs}")
     print -r -- "[ALERT] ${(j: | :)alerts}"
+  elif (( ! ${#last} )); then
+    print -r -- "[INFO] ${no_runs}"
   fi
 
   print "=== Health ==="
@@ -551,6 +649,7 @@ mac_ops_run_health() {
   else
     print "Last run:         none recorded (${MAC_OPS_HOME}/runs)"
   fi
+  print -r -- "Run lock:         ${lock_line}"
   for i in "${agent_lines[@]}"; do
     print -r -- "Agent ${i}"
   done

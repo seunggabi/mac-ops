@@ -2,14 +2,16 @@
 # macOS system notification utilities
 
 # Send macOS system notification
-# Args: title, message
-# Only send notification when MAC_OPS_SCHEDULED=true (interactive mode already shows output via stdout)
+# Args: title, message, [always]
+# Only sent when MAC_OPS_SCHEDULED=true (interactive mode already shows output
+# via stdout), unless the third argument is "always" (a failed run is
+# notified whether it was scheduled or started by hand)
 mac_ops_notify() {
   local title="$1"
   local message="$2"
 
-  # Do not notify if not in scheduled mode
-  if [[ "$MAC_OPS_SCHEDULED" != "true" ]]; then
+  # Do not notify if not in scheduled mode (failures pass "always")
+  if [[ "$MAC_OPS_SCHEDULED" != "true" && "${3:-}" != "always" ]]; then
     return 0
   fi
 
@@ -77,13 +79,18 @@ mac_ops_notify_message() {
 
 # Cleanup completion notification
 # Args: same as mac_ops_notify_message
-# Do not notify if nothing was cleaned and the run did not fail
+# Do not notify if nothing was cleaned and the run did not fail. A failed run
+# (errors logged or non-zero exit status) is notified in scheduled and
+# manual mode alike; a successful one only in scheduled mode.
 mac_ops_notify_completion() {
-  local message title="Mac-Ops Cleanup Completed"
+  local message title="Mac-Ops Cleanup Completed" mode=""
   message=$(mac_ops_notify_message "$@")
   [[ -z "$message" ]] && return 0
-  [[ "${7:-0}" != "0" || "${9:-0}" != "0" ]] && title="Mac-Ops Run Had Errors"
-  mac_ops_notify "$title" "$message"
+  if [[ "${7:-0}" != "0" || "${9:-0}" != "0" ]]; then
+    title="Mac-Ops Run Had Errors"
+    mode="always"
+  fi
+  mac_ops_notify "$title" "$message" "${mode}"
 }
 
 # End-of-run notification: counts ERROR/WARN lines written to the log since
