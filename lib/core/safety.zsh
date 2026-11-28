@@ -73,7 +73,7 @@ MAC_OPS_PROTECTED_PROCESSES=(
 )
 
 # --- Size limits ---
-MAC_OPS_MAX_SINGLE_FILE_BYTES=2147483648   # 2GB
+MAC_OPS_MAX_SINGLE_FILE_BYTES=${MAC_OPS_MAX_SINGLE_FILE_BYTES:-2147483648}   # 2GB (setting MaxSingleFileBytes)
 MAC_OPS_MAX_BATCH_BYTES=10737418240        # 10GB
 
 # -----------------------------------------------------------------------------

@@ -68,6 +68,8 @@ Pure zsh. No Python, no Ruby, no Node.js. Only macOS built-in tools (`zsh`, `plu
 
 ### 10 Cleanup Modules
 
+Enabled by default: `cache`, `tmp`, `log`, `orphan-app`. The others are off until enabled in config.plist (see [Settings](#settings-and-configplist)).
+
 | Module | Description |
 |--------|-------------|
 | `cache` | Clean `~/Library/Caches` (Apple system caches excluded) |
@@ -190,6 +192,67 @@ mac-ops help
 ```
 
 ## Configuration
+
+### Settings and config.plist
+
+Every setting can be set three ways. The first one found wins:
+
+1. an environment variable (`MAC_OPS_...`)
+2. `~/.mac-ops/config.plist` (or the file named by `MAC_OPS_CONFIG_FILE`), using the key path below
+3. the built-in default
+
+Command-line flags (`--dry-run`, `--verbose`, `--force`) override all three, so `--dry-run` holds even when config.plist says `DryRun` is false.
+The scheduled launchd job passes no `MAC_OPS_*` variables, so use config.plist for settings that should apply to scheduled runs.
+Start from [`config/default.plist`](config/default.plist), which lists every key with its default: `cp config/default.plist ~/.mac-ops/config.plist`.
+
+- A missing key, or no config file, means the default.
+- A config file that cannot be parsed stops every command with an error (on stderr and in the log); mac-ops never runs on defaults you did not choose.
+- A value of the wrong type (not an integer, below the minimum, not an allowed word) logs a WARN and uses the default.
+- `mac-ops config` prints every setting with its effective value and its source (`env`, `file`, `default` or `cli`).
+
+Modules: a plain `mac-ops run` runs only enabled modules and logs one line for each disabled one. By default only modules that move files to the mac-ops trash are enabled (`cache`, `tmp`, `log`, `orphan-app`). `brew` (deletes permanently), `dev`, `browser`, `docker`, `zombie` and `orphan` (process modules) are off until you enable them. `mac-ops run --module=NAME` runs that one module even when it is disabled, and logs that it was explicitly requested.
+
+| config.plist key | Environment variable | Default | Allowed |
+|---|---|---|---|
+| `DryRun` | `MAC_OPS_DRY_RUN` | `false` | true / false |
+| `Verbose` | `MAC_OPS_VERBOSE` | `false` | true / false |
+| `Force` | `MAC_OPS_FORCE` | `false` | true / false |
+| `TrashRetentionHours` | `MAC_OPS_TRASH_RETENTION_HOURS` | `72` | integer >= 1 |
+| `MaxSingleFileBytes` | `MAC_OPS_MAX_SINGLE_FILE_BYTES` | `2147483648` | integer >= 1 |
+| `ParallelTimeoutSeconds` | `MAC_OPS_PARALLEL_TIMEOUT_SECONDS` | `300` | integer >= 1 |
+| `IndexLockTimeoutSeconds` | `MAC_OPS_INDEX_LOCK_TIMEOUT_SECONDS` | `120` | integer >= 1 |
+| `OpenFilesTTLSeconds` | `MAC_OPS_OPEN_FILES_TTL_SECONDS` | `60` | integer >= 0 |
+| `TrashSkipOpenDirs` | `MAC_OPS_TRASH_SKIP_OPEN_DIRS` | `true` | true / false |
+| `TrashReconcileMaxDepth` | `MAC_OPS_TRASH_RECONCILE_MAX_DEPTH` | `6` | integer >= 1 |
+| `TrashRecoveryMinLeftHours` | `MAC_OPS_TRASH_RECOVERY_MIN_LEFT_HOURS` | `24` | integer >= 0 |
+| `Modules.cache-cleanup.Enabled` | `MAC_OPS_MODULE_CACHE_CLEANUP_ENABLED` | `true` | true / false |
+| `Modules.cache-cleanup.MaxAgeDays` | `MAC_OPS_CACHE_MAX_AGE_DAYS` | `30` | integer >= 1 |
+| `Modules.cache-cleanup.RecentDays` | `MAC_OPS_CACHE_RECENT_DAYS` | `7` | integer >= 0 |
+| `Modules.tmp-cleanup.Enabled` | `MAC_OPS_MODULE_TMP_CLEANUP_ENABLED` | `true` | true / false |
+| `Modules.tmp-cleanup.MaxAgeDays` | `MAC_OPS_TMP_MAX_AGE_DAYS` | `3` | integer >= 1 |
+| `Modules.tmp-cleanup.VarFoldersMaxAgeDays` | `MAC_OPS_VAR_FOLDERS_MAX_AGE_DAYS` | `7` | integer >= 1 |
+| `Modules.tmp-cleanup.CrashMaxAgeDays` | `MAC_OPS_CRASH_MAX_AGE_DAYS` | `14` | integer >= 1 |
+| `Modules.log-cleanup.Enabled` | `MAC_OPS_MODULE_LOG_CLEANUP_ENABLED` | `true` | true / false |
+| `Modules.log-cleanup.MaxAgeDays` | `MAC_OPS_LOG_CLEANUP_MAX_AGE_DAYS` | `7` | integer >= 1 |
+| `Modules.log-cleanup.DiagReportMaxAgeDays` | `MAC_OPS_DIAG_REPORT_MAX_AGE_DAYS` | `30` | integer >= 1 |
+| `Modules.orphan-app-cleanup.Enabled` | `MAC_OPS_MODULE_ORPHAN_APP_CLEANUP_ENABLED` | `true` | true / false |
+| `Modules.orphan-app-cleanup.GraceDays` | `MAC_OPS_ORPHAN_APP_GRACE_DAYS` | `7` | integer >= 0 |
+| `Modules.orphan-app-cleanup.DataAction` | `MAC_OPS_ORPHAN_APP_DATA_ACTION` | `report` | report / trash |
+| `Modules.brew-cleanup.Enabled` | `MAC_OPS_MODULE_BREW_CLEANUP_ENABLED` | `false` | true / false |
+| `Modules.dev-cleanup.Enabled` | `MAC_OPS_MODULE_DEV_CLEANUP_ENABLED` | `false` | true / false |
+| `Modules.dev-cleanup.MaxAgeDays` | `MAC_OPS_DEV_CACHE_MAX_AGE_DAYS` | `30` | integer >= 1 |
+| `Modules.browser-cleanup.Enabled` | `MAC_OPS_MODULE_BROWSER_CLEANUP_ENABLED` | `false` | true / false |
+| `Modules.docker-cleanup.Enabled` | `MAC_OPS_MODULE_DOCKER_CLEANUP_ENABLED` | `false` | true / false |
+| `Modules.docker-cleanup.Action` | `MAC_OPS_DOCKER_ACTION` | `report` | report / prune |
+| `Modules.docker-cleanup.PruneUntilHours` | `MAC_OPS_DOCKER_PRUNE_UNTIL_HOURS` | `720` | integer >= 1 |
+| `Modules.docker-cleanup.ProbeTimeoutSeconds` | `MAC_OPS_DOCKER_PROBE_TIMEOUT` | `10` | integer >= 1 |
+| `Modules.zombie-killer.Enabled` | `MAC_OPS_MODULE_ZOMBIE_KILLER_ENABLED` | `false` | true / false |
+| `Modules.zombie-killer.Action` | `MAC_OPS_ZOMBIE_ACTION` | `report` | report / sigchld |
+| `Modules.orphan-killer.Enabled` | `MAC_OPS_MODULE_ORPHAN_KILLER_ENABLED` | `false` | true / false |
+| `Modules.orphan-killer.MinRunningHours` | `MAC_OPS_ORPHAN_MIN_RUNNING_HOURS` | `24` | integer >= 1 |
+| `Modules.orphan-killer.Action` | `MAC_OPS_ORPHAN_ACTION` | `report` | report / term |
+| `Monitor.RetentionDays` | `MAC_OPS_MONITOR_RETENTION_DAYS` | `7` | integer >= 1 |
+| `Monitor.KillThresholdMB` | `MAC_OPS_MONITOR_KILL_THRESHOLD_MB` | `500` | integer >= 1 |
 
 ### Environment Variables
 
@@ -420,7 +483,8 @@ mac-ops/
 ├── bin/mac-ops                    # CLI entry point
 ├── lib/
 │   ├── core/                      # Core utilities
-│   │   ├── config.zsh             # Configuration loader
+│   │   ├── config.zsh             # Settings registry and config.plist loader
+│   │   ├── dispatch.zsh           # Module selection (Enabled flags) and dispatch
 │   │   ├── trash.zsh              # Trash management
 │   │   ├── logger.zsh             # Logging
 │   │   ├── lock.zsh               # Prevent duplicate execution
@@ -447,7 +511,7 @@ mac-ops/
 │       ├── plist-helper.zsh
 │       └── snapshot.zsh
 ├── config/                        # Configuration files
-│   ├── default.plist              # Default module enable/disable settings
+│   ├── default.plist              # Every setting with its default (copy to ~/.mac-ops/config.plist)
 │   └── ignore.example             # Example ignore file template
 ├── launchd/                       # launchd agents
 ├── scripts/                       # Utility scripts
