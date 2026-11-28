@@ -830,7 +830,10 @@ TA_LOG="${FX_OPS}/.logs/mac-ops.log"
 test_run_lock_held() {
     reset_fixture
     local out
-    out=$(_ta_run 'f() { return 0; }; f
+    # Setting up the traps again while the lock is held (the old function
+    # released it on return through a function-scoped EXIT trap)
+    out=$(_ta_run 'mac_ops_setup_trap
+        f() { return 0; }; f
         [[ -f "${MAC_OPS_LOCK_FILE}" ]] && print "LOCK_HELD_AFTER_SETUP"
         mac_ops_run_finish 0
         [[ -f "${MAC_OPS_LOCK_FILE}" ]] || print "LOCK_RELEASED_AT_FINISH"' 2>&1)
@@ -1125,6 +1128,45 @@ test_health_stale_agent
 test_health_ok
 unset -f _mac_ops_agent_loaded
 rm -rf -- "${MAC_OPS_HOME}/runs" "${TC_AGENTS}"
+
+# restore --run: a run that moved X/sub and later X restores both
+test_run_restore_nested_order() {
+    _t5_reset_trash
+    rm -rf -- "${MAC_OPS_HOME}/runs"
+    local base="${HOME}/b8nest"
+    rm -rf -- "${base}"
+    mkdir -p "${base}/X/sub"
+    print s > "${base}/X/sub/s.txt"
+    print o > "${base}/X/other.txt"
+    mac_ops_run_start
+    local run_id="${MAC_OPS_RUN_ID}"
+    mac_ops_trash_move "${base}/X/sub" "test" "mod-a" >/dev/null 2>&1
+    mac_ops_trash_move "${base}/X" "test" "mod-a" >/dev/null 2>&1
+    mac_ops_run_finish 0 >/dev/null 2>&1
+    local out rc=0
+    out=$(_tb_zsh "mac_ops_trash_restore_run '${run_id}'" 2>&1) || rc=$?
+    assert_eq "${rc}" "0" "restore --run of X/sub then X: exit 0"
+    assert_output_contains "${out}" "2 restored, 0 refused" "restore --run of X/sub then X: both restored"
+    assert_eq "$(cat "${base}/X/sub/s.txt" 2>/dev/null)/$(cat "${base}/X/other.txt" 2>/dev/null)" "s/o" "restore --run of X/sub then X: tree back in place"
+    rm -rf -- "${base}"
+}
+
+# bin/mac-ops status (read-only, under ERR_EXIT): alert on the first line
+test_status_cli_alert() {
+    reset_fixture
+    local saved_home="${MAC_OPS_HOME}"
+    MAC_OPS_HOME="${FX_OPS}"
+    _tc_manifest 600 true 2 1 0 0
+    MAC_OPS_HOME="${saved_home}"
+    local out rc=0
+    out=$(fx_env zsh "${MAC_OPS_ROOT}/bin/mac-ops" status 2>&1) || rc=$?
+    assert_eq "${rc}" "0" "status with a failed scheduled run: exit 0"
+    assert_output_contains "${out%%$'\n'*}" "[ALERT] last scheduled run" "status: failed scheduled run alerted on the first line"
+    assert_output_contains "${out%%$'\n'*}" "FAILED (exit status 2" "status: failed exit status on the first line"
+}
+
+test_run_restore_nested_order
+test_status_cli_alert
 
 # --- Teardown ---
 rm -rf "${TEST_TMPDIR}"

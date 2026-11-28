@@ -70,6 +70,12 @@ mac_ops_run_finish() {
   MAC_OPS_RUN_STATS_DIR=""
 
   _mac_ops_run_write_manifest "${exit_status}"
+  # The move list is removed whether or not a manifest was written (dry-run
+  # set by the configuration after the run started, write failure)
+  if [[ -n "${MAC_OPS_RUN_MOVES_FILE}" && "${MAC_OPS_RUN_MOVES_FILE}" == *"/run_"*".moves" ]]; then
+    rm -f "${MAC_OPS_RUN_MOVES_FILE}" 2>/dev/null
+  fi
+  MAC_OPS_RUN_MOVES_FILE=""
 
   if [[ "${_MAC_OPS_RUN_LOCKED}" == "true" ]]; then
     mac_ops_release_lock
@@ -233,11 +239,6 @@ _mac_ops_run_write_manifest() {
     return 1
   fi
 
-  if [[ -n "${MAC_OPS_RUN_MOVES_FILE}" && "${MAC_OPS_RUN_MOVES_FILE}" == *"/run_"*".moves" ]]; then
-    rm -f "${MAC_OPS_RUN_MOVES_FILE}" 2>/dev/null
-  fi
-  MAC_OPS_RUN_MOVES_FILE=""
-
   # Keep the newest manifests (run IDs sort by start time)
   local -a manifests
   manifests=("${runs_dir}"/*.json(N))
@@ -353,8 +354,10 @@ mac_ops_trash_restore_run() {
     [[ "${_MAC_OPS_IDX_RUNID[${key}]}" == "${run_id}" ]] && keys+=("${key}")
   done
 
+  # Newest move first: when a run moved X/sub and later X, X is restored
+  # before X/sub, so restoring X/sub does not create X and refuse it
   local restored=0 refused=0 failed=0 gone=0 orig
-  for key in "${keys[@]}"; do
+  for key in "${(Oa)keys[@]}"; do
     orig="${_MAC_OPS_IDX_ORIG[${key}]}"
     if _mac_ops_trash_restore_key_locked "${key}"; then
       restored=$((restored + 1))

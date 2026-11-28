@@ -583,21 +583,24 @@ _mac_ops_main() {
       restore)
         command="restore"
         shift
-        # Capture path argument after restore, or --run <run-id>
-        if [[ $# -gt 0 && "${1}" == "--run" ]]; then
-          if [[ $# -lt 2 ]]; then
-            print -- "[ERROR] restore --run needs a run ID (see: mac-ops runs)" >&2
-            return 1
-          fi
-          restore_run="${2}"
-          shift 2
-        elif [[ $# -gt 0 && "${1}" == --run=* ]]; then
-          restore_run="${1#--run=}"
-          shift
-        elif [[ $# -gt 0 && "${1}" != --* ]]; then
+        # Capture path argument after restore (or --run <run-id>, below)
+        if [[ $# -gt 0 && "${1}" != --* ]]; then
           restore_path="${1}"
           shift
         fi
+        ;;
+      --run)
+        # restore --run <run-id> (any position after restore)
+        if [[ $# -lt 2 || "${2}" == --* ]]; then
+          print -- "[ERROR] --run needs a run ID (see: mac-ops runs)" >&2
+          return 1
+        fi
+        restore_run="${2}"
+        shift 2
+        ;;
+      --run=*)
+        restore_run="${1#--run=}"
+        shift
         ;;
       runs)
         command="runs"
@@ -645,6 +648,11 @@ _mac_ops_main() {
         ;;
     esac
   done
+
+  if [[ -n "${restore_run}" && "${command}" != "restore" ]]; then
+    print -- "[ERROR] --run is only valid with restore: mac-ops restore --run <run-id>" >&2
+    return 1
+  fi
 
   # Execute command
   case "${command}" in
