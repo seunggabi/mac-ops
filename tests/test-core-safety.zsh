@@ -303,6 +303,63 @@ assert_output_contains "${out}" "MAC_OPS_TRASH_RETENTION_HOURS: no valid value s
 assert_output_not_contains "${out}" "MAC_OPS_DRY_RUN: no valid value set" "no default warning when the file value is used"
 
 print ""
+print "[TEST] settings_enabled_flags_strict"
+
+# Off-by-default modules must not turn on for yes / 1 / TRUE; only <true/>
+# or the exact string "true" enables. Inexact off values disable.
+_cfg_enabled() {
+    # Usage: _cfg_enabled <module> <plutil type flag> <value>
+    plutil -insert "Modules.$1" -dictionary "${CFG}" >/dev/null 2>&1
+    plutil -insert "Modules.$1.Enabled" "$2" "$3" "${CFG}"
+}
+reset_fixture
+plutil -create xml1 "${CFG}"
+plutil -insert Modules -dictionary "${CFG}"
+_cfg_enabled zombie-killer -string yes
+_cfg_enabled orphan-killer -integer 1
+_cfg_enabled docker-cleanup -string TRUE
+_cfg_enabled brew-cleanup -bool true
+_cfg_enabled dev-cleanup -string true
+_cfg_enabled cache-cleanup -integer 0
+_cfg_enabled log-cleanup -bool false
+_cfg_enabled tmp-cleanup -string maybe
+out=$(fx_zsh MAC_OPS_MODULE_BROWSER_CLEANUP_ENABLED=1 -- '
+    mac_ops_load_config
+    for m in zombie-killer orphan-killer docker-cleanup browser-cleanup brew-cleanup dev-cleanup cache-cleanup log-cleanup tmp-cleanup; do
+      mac_ops_module_enabled "${m}" && print "${m}=on" || print "${m}=off"
+    done' 2>&1)
+assert_output_contains "${out}" "zombie-killer=off" "<string>yes</string> does not enable an off-by-default module"
+assert_output_contains "${out}" "orphan-killer=off" "<integer>1</integer> does not enable an off-by-default module"
+assert_output_contains "${out}" "docker-cleanup=off" "<string>TRUE</string> does not enable an off-by-default module"
+assert_output_contains "${out}" "browser-cleanup=off" "MAC_OPS_MODULE_..._ENABLED=1 does not enable an off-by-default module"
+assert_output_contains "${out}" "brew-cleanup=on" "<true/> enables a module"
+assert_output_contains "${out}" "dev-cleanup=on" "the exact string true enables a module"
+assert_output_contains "${out}" "cache-cleanup=off" "inexact off value (<integer>0</integer>) disables a default-on module"
+assert_output_contains "${out}" "log-cleanup=off" "<false/> disables a module"
+assert_output_contains "${out}" "tmp-cleanup=on" "unrecognised value keeps the default"
+assert_output_contains "${out}" "[WARN] Invalid value 'yes' for Modules.zombie-killer.Enabled" "yes is warned"
+assert_output_contains "${out}" "[WARN] Invalid value '1' for Modules.orphan-killer.Enabled" "1 is warned"
+assert_output_contains "${out}" "[WARN] Invalid value 'TRUE' for Modules.docker-cleanup.Enabled" "TRUE is warned"
+assert_output_contains "${out}" "[WARN] Invalid value '1' for MAC_OPS_MODULE_BROWSER_CLEANUP_ENABLED" "env 1 is warned"
+assert_output_contains "${out}" "[WARN] Inexact value '0' for Modules.cache-cleanup.Enabled" "inexact off value is warned"
+assert_output_contains "${out}" "[WARN] Invalid value 'maybe' for Modules.tmp-cleanup.Enabled" "unrecognised value is warned"
+assert_output_not_contains "${out}" "for Modules.brew-cleanup.Enabled" "<true/> is not warned"
+assert_output_not_contains "${out}" "for Modules.log-cleanup.Enabled" "<false/> is not warned"
+unset -f _cfg_enabled
+
+print ""
+print "[TEST] settings_retention_cap"
+
+reset_fixture
+plutil -create xml1 "${CFG}"
+plutil -insert TrashRetentionHours -integer 9000 "${CFG}"
+out=$(fx_zsh -- 'mac_ops_load_config; print "ret=${MAC_OPS_TRASH_RETENTION_HOURS}/${MAC_OPS_SETTING_SOURCE[MAC_OPS_TRASH_RETENTION_HOURS]}"' 2>&1)
+assert_output_contains "${out}" "ret=72/default" "TrashRetentionHours above 8760 falls back to the default"
+assert_output_contains "${out}" "[WARN] Invalid value '9000' for TrashRetentionHours" "TrashRetentionHours above the cap is warned"
+out=$(fx_zsh MAC_OPS_TRASH_RETENTION_HOURS=8760 -- 'mac_ops_load_config; print "ret=${MAC_OPS_TRASH_RETENTION_HOURS}/${MAC_OPS_SETTING_SOURCE[MAC_OPS_TRASH_RETENTION_HOURS]}"' 2>&1)
+assert_output_contains "${out}" "ret=8760/env" "TrashRetentionHours of exactly 8760 is accepted"
+
+print ""
 print "[TEST] config_lists_every_setting"
 
 reset_fixture

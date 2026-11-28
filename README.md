@@ -219,6 +219,7 @@ Start from [`config/default.plist`](config/default.plist), which lists every key
 - A missing key, or no config file, means the default.
 - A config file that cannot be parsed stops every command with an error (on stderr and in the log); mac-ops never runs on defaults you did not choose.
 - A value of the wrong type (not an integer, below the minimum, not an allowed word) logs a WARN and uses the default.
+- `Modules.<name>.Enabled` accepts only `<true/>` / `<false/>` (or the exact strings `true` / `false`; the same for `MAC_OPS_MODULE_<NAME>_ENABLED`). `yes`, `1` or `TRUE` never enable a module: they log a WARN and keep the default. An inexact off value (`no`, `0`, `FALSE`, `off`) logs a WARN and disables the module.
 - `mac-ops config` prints every setting with its effective value and its source (`env`, `file`, `default` or `cli`).
 
 Modules: a plain `mac-ops run` runs only enabled modules and logs one line for each disabled one. By default only modules that move files to the mac-ops trash are enabled (`cache`, `tmp`, `log`, `orphan-app`). `brew` (deletes permanently), `dev`, `browser`, `docker`, `zombie` and `orphan` (process modules) are off until you enable them. `mac-ops run --module=NAME` runs that one module even when it is disabled, and logs that it was explicitly requested.
@@ -228,7 +229,7 @@ Modules: a plain `mac-ops run` runs only enabled modules and logs one line for e
 | `DryRun` | `MAC_OPS_DRY_RUN` | `false` | true / false |
 | `Verbose` | `MAC_OPS_VERBOSE` | `false` | true / false |
 | `Force` | `MAC_OPS_FORCE` | `false` | true / false |
-| `TrashRetentionHours` | `MAC_OPS_TRASH_RETENTION_HOURS` | `72` | integer >= 1 |
+| `TrashRetentionHours` | `MAC_OPS_TRASH_RETENTION_HOURS` | `72` | integer 1 to 8760 (one year) |
 | `MaxSingleFileBytes` | `MAC_OPS_MAX_SINGLE_FILE_BYTES` | `2147483648` | integer >= 1 |
 | `ParallelTimeoutSeconds` | `MAC_OPS_PARALLEL_TIMEOUT_SECONDS` | `300` | integer >= 1 |
 | `IndexLockTimeoutSeconds` | `MAC_OPS_INDEX_LOCK_TIMEOUT_SECONDS` | `120` | integer >= 1 |

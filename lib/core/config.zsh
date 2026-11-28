@@ -17,7 +17,13 @@ MAC_OPS_CONFIG_FILE="${MAC_OPS_CONFIG_FILE:-${MAC_OPS_HOME}/config.plist}"
 # -----------------------------------------------------------------------------
 # Settings registry: one entry per user setting, "VAR|plist key path|default|type"
 #   type: bool              true/false (yes/no/1/0 are accepted and normalised)
+#         enable            module Enabled flags: only plist <true/>/<false/> or
+#                           the exact strings "true"/"false". Any other value
+#                           never enables a module: an "off" spelling
+#                           (no/0/FALSE/off) disables it, anything else keeps
+#                           the default; both are warned
 #         int:MIN           integer >= MIN
+#         int:MIN:MAX       integer >= MIN and <= MAX
 #         enum:a,b,...      one of the listed values
 # Precedence: environment variable > config.plist > built-in default.
 # Command-line flags (--dry-run, --verbose, --force) override all three.
@@ -32,7 +38,7 @@ MAC_OPS_SETTINGS=(
   "MAC_OPS_DRY_RUN|DryRun|false|bool"
   "MAC_OPS_VERBOSE|Verbose|false|bool"
   "MAC_OPS_FORCE|Force|false|bool"
-  "MAC_OPS_TRASH_RETENTION_HOURS|TrashRetentionHours|72|int:1"
+  "MAC_OPS_TRASH_RETENTION_HOURS|TrashRetentionHours|72|int:1:8760"
   "MAC_OPS_MAX_SINGLE_FILE_BYTES|MaxSingleFileBytes|2147483648|int:1"
   "MAC_OPS_PARALLEL_TIMEOUT_SECONDS|ParallelTimeoutSeconds|300|int:1"
   "MAC_OPS_INDEX_LOCK_TIMEOUT_SECONDS|IndexLockTimeoutSeconds|120|int:1"
@@ -40,30 +46,30 @@ MAC_OPS_SETTINGS=(
   "MAC_OPS_TRASH_SKIP_OPEN_DIRS|TrashSkipOpenDirs|true|bool"
   "MAC_OPS_TRASH_RECONCILE_MAX_DEPTH|TrashReconcileMaxDepth|6|int:1"
   "MAC_OPS_TRASH_RECOVERY_MIN_LEFT_HOURS|TrashRecoveryMinLeftHours|24|int:0"
-  "MAC_OPS_MODULE_CACHE_CLEANUP_ENABLED|Modules.cache-cleanup.Enabled|true|bool"
+  "MAC_OPS_MODULE_CACHE_CLEANUP_ENABLED|Modules.cache-cleanup.Enabled|true|enable"
   "MAC_OPS_CACHE_MAX_AGE_DAYS|Modules.cache-cleanup.MaxAgeDays|30|int:1"
   "MAC_OPS_CACHE_RECENT_DAYS|Modules.cache-cleanup.RecentDays|7|int:0"
-  "MAC_OPS_MODULE_TMP_CLEANUP_ENABLED|Modules.tmp-cleanup.Enabled|true|bool"
+  "MAC_OPS_MODULE_TMP_CLEANUP_ENABLED|Modules.tmp-cleanup.Enabled|true|enable"
   "MAC_OPS_TMP_MAX_AGE_DAYS|Modules.tmp-cleanup.MaxAgeDays|3|int:1"
   "MAC_OPS_VAR_FOLDERS_MAX_AGE_DAYS|Modules.tmp-cleanup.VarFoldersMaxAgeDays|7|int:1"
   "MAC_OPS_CRASH_MAX_AGE_DAYS|Modules.tmp-cleanup.CrashMaxAgeDays|14|int:1"
-  "MAC_OPS_MODULE_LOG_CLEANUP_ENABLED|Modules.log-cleanup.Enabled|true|bool"
+  "MAC_OPS_MODULE_LOG_CLEANUP_ENABLED|Modules.log-cleanup.Enabled|true|enable"
   "MAC_OPS_LOG_CLEANUP_MAX_AGE_DAYS|Modules.log-cleanup.MaxAgeDays|7|int:1"
   "MAC_OPS_DIAG_REPORT_MAX_AGE_DAYS|Modules.log-cleanup.DiagReportMaxAgeDays|30|int:1"
-  "MAC_OPS_MODULE_ORPHAN_APP_CLEANUP_ENABLED|Modules.orphan-app-cleanup.Enabled|true|bool"
+  "MAC_OPS_MODULE_ORPHAN_APP_CLEANUP_ENABLED|Modules.orphan-app-cleanup.Enabled|true|enable"
   "MAC_OPS_ORPHAN_APP_GRACE_DAYS|Modules.orphan-app-cleanup.GraceDays|7|int:0"
   "MAC_OPS_ORPHAN_APP_DATA_ACTION|Modules.orphan-app-cleanup.DataAction|report|enum:report,trash"
-  "MAC_OPS_MODULE_BREW_CLEANUP_ENABLED|Modules.brew-cleanup.Enabled|false|bool"
-  "MAC_OPS_MODULE_DEV_CLEANUP_ENABLED|Modules.dev-cleanup.Enabled|false|bool"
+  "MAC_OPS_MODULE_BREW_CLEANUP_ENABLED|Modules.brew-cleanup.Enabled|false|enable"
+  "MAC_OPS_MODULE_DEV_CLEANUP_ENABLED|Modules.dev-cleanup.Enabled|false|enable"
   "MAC_OPS_DEV_CACHE_MAX_AGE_DAYS|Modules.dev-cleanup.MaxAgeDays|30|int:1"
-  "MAC_OPS_MODULE_BROWSER_CLEANUP_ENABLED|Modules.browser-cleanup.Enabled|false|bool"
-  "MAC_OPS_MODULE_DOCKER_CLEANUP_ENABLED|Modules.docker-cleanup.Enabled|false|bool"
+  "MAC_OPS_MODULE_BROWSER_CLEANUP_ENABLED|Modules.browser-cleanup.Enabled|false|enable"
+  "MAC_OPS_MODULE_DOCKER_CLEANUP_ENABLED|Modules.docker-cleanup.Enabled|false|enable"
   "MAC_OPS_DOCKER_ACTION|Modules.docker-cleanup.Action|report|enum:report,prune"
   "MAC_OPS_DOCKER_PRUNE_UNTIL_HOURS|Modules.docker-cleanup.PruneUntilHours|720|int:1"
   "MAC_OPS_DOCKER_PROBE_TIMEOUT|Modules.docker-cleanup.ProbeTimeoutSeconds|10|int:1"
-  "MAC_OPS_MODULE_ZOMBIE_KILLER_ENABLED|Modules.zombie-killer.Enabled|false|bool"
+  "MAC_OPS_MODULE_ZOMBIE_KILLER_ENABLED|Modules.zombie-killer.Enabled|false|enable"
   "MAC_OPS_ZOMBIE_ACTION|Modules.zombie-killer.Action|report|enum:report,sigchld"
-  "MAC_OPS_MODULE_ORPHAN_KILLER_ENABLED|Modules.orphan-killer.Enabled|false|bool"
+  "MAC_OPS_MODULE_ORPHAN_KILLER_ENABLED|Modules.orphan-killer.Enabled|false|enable"
   "MAC_OPS_ORPHAN_MIN_RUNNING_HOURS|Modules.orphan-killer.MinRunningHours|24|int:1"
   "MAC_OPS_ORPHAN_ACTION|Modules.orphan-killer.Action|report|enum:report,term"
   "MAC_OPS_MONITOR_RETENTION_DAYS|Monitor.RetentionDays|7|int:1"
@@ -153,11 +159,21 @@ _mac_ops_setting_validate() {
         *)           return 1 ;;
       esac
       ;;
+    enable)
+      case "${value}" in
+        true|false)  print -r -- "${value}" ;;
+        *)           return 1 ;;
+      esac
+      ;;
     int:*)
       [[ "${value}" =~ ^[0-9]+$ ]] || return 1
       # Reject values that do not fit a 64-bit integer
       [[ ${#value} -le 18 ]] || return 1
-      (( 10#${value} >= ${type#int:} )) || return 1
+      local bounds="${type#int:}"
+      (( 10#${value} >= ${bounds%%:*} )) || return 1
+      if [[ "${bounds}" == *:* ]]; then
+        (( 10#${value} <= ${bounds#*:} )) || return 1
+      fi
       print -r -- "$((10#${value}))"
       ;;
     enum:*)
@@ -170,6 +186,20 @@ _mac_ops_setting_validate() {
       return 1
       ;;
   esac
+}
+
+# -----------------------------------------------------------------------------
+# An inexact "off" spelling of an Enabled flag (no, 0, off, FALSE, ...):
+# disabling a module is always the safe direction, so it is honoured (with a
+# WARN). Inexact "on" spellings (yes, 1, TRUE) never enable a module.
+# Usage: _mac_ops_setting_off_spelling <type> <value>
+# -----------------------------------------------------------------------------
+_mac_ops_setting_off_spelling() {
+  [[ "$1" == "enable" ]] || return 1
+  case "${(L)2}" in
+    false|no|0|off) return 0 ;;
+  esac
+  return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -212,6 +242,9 @@ mac_ops_load_config() {
       raw="${_MAC_OPS_ENV_SETTINGS[${name}]}"
       if val=$(_mac_ops_setting_validate "${type}" "${raw}"); then
         src="env"
+      elif _mac_ops_setting_off_spelling "${type}" "${raw}"; then
+        _mac_ops_config_log "WARN" "Inexact value '${raw}' for ${name} (environment, expected true or false); treating it as false"
+        val="false" src="env"
       else
         _mac_ops_config_log "WARN" "Invalid value '${raw}' for ${name} (environment, expected ${type}); ignoring it"
         val="" invalid=true
@@ -221,6 +254,9 @@ mac_ops_load_config() {
       && raw=$(plutil -extract "${key}" raw -o - "${MAC_OPS_CONFIG_FILE}" 2>/dev/null); then
       if val=$(_mac_ops_setting_validate "${type}" "${raw}"); then
         src="file"
+      elif _mac_ops_setting_off_spelling "${type}" "${raw}"; then
+        _mac_ops_config_log "WARN" "Inexact value '${raw}' for ${key} in ${MAC_OPS_CONFIG_FILE} (expected <true/> or <false/>); treating it as false"
+        val="false" src="file"
       else
         _mac_ops_config_log "WARN" "Invalid value '${raw}' for ${key} in ${MAC_OPS_CONFIG_FILE} (expected ${type}); ignoring it"
         val="" invalid=true
