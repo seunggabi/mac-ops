@@ -224,27 +224,42 @@ mac_ops_is_process_protected() {
 
 # -----------------------------------------------------------------------------
 # Check size guard
-# Return 1 if file exceeds 2GB (ignored if --force / MAC_OPS_FORCE=true)
+# Return 1 if the item is larger than MAC_OPS_MAX_SINGLE_FILE_BYTES (setting
+# MaxSingleFileBytes; ignored with --force / MAC_OPS_FORCE=true), or if it no
+# longer exists. Skipping an oversized item is a refusal, not a failure: it
+# is logged at WARN (never ERROR), so it does not make the run fail or
+# notify "Run Had Errors" on every scheduled run. A path that vanished since
+# it was selected (another module moved it) is logged at DEBUG.
 # Usage: mac_ops_check_size_guard <path>
 # -----------------------------------------------------------------------------
 mac_ops_check_size_guard() {
   local target_path="${1}"
 
-  if [[ -z "${target_path}" || ! -e "${target_path}" ]]; then
-    mac_ops_log_error "Path does not exist: ${target_path}"
+  if [[ -z "${target_path}" ]]; then
+    mac_ops_log_error "Size guard: no path given"
+    return 1
+  fi
+  if [[ ! -e "${target_path}" ]]; then
+    mac_ops_log_debug "Size guard: skipped, no longer exists (moved or removed since it was selected): ${target_path}"
     return 1
   fi
 
-  local size_bytes
+  local size_bytes limit="${MAC_OPS_MAX_SINGLE_FILE_BYTES}"
   size_bytes=$(mac_ops_get_dir_size "${target_path}")
+  [[ "${size_bytes}" =~ ^[0-9]+$ ]] || size_bytes=0
+  [[ "${limit}" =~ ^[0-9]+$ ]] || limit=2147483648
 
-  if [[ ${size_bytes} -gt ${MAC_OPS_MAX_SINGLE_FILE_BYTES} ]]; then
+  if (( size_bytes > limit )); then
+    local size_txt="${size_bytes} bytes" limit_txt="${limit} bytes"
+    if (( ${+functions[mac_ops_format_bytes]} )); then
+      size_txt="$(mac_ops_format_bytes "${size_bytes}")"
+      limit_txt="$(mac_ops_format_bytes "${limit}")"
+    fi
     if [[ "${MAC_OPS_FORCE}" == "true" ]]; then
-      mac_ops_log_warn "Size guard exceeded (${size_bytes} bytes) but continuing with --force mode: ${target_path}"
+      mac_ops_log_warn "Size guard exceeded (${size_txt} > limit ${limit_txt}) but continuing with --force mode: ${target_path}"
       return 0
     fi
-    local size_gb=$(( size_bytes / 1073741824 ))
-    mac_ops_log_error "Size guard: ${target_path} (${size_gb}GB) exceeds 2GB limit. Use --force to override."
+    mac_ops_log_warn "Size guard: skipped ${target_path} (${size_txt}), larger than the MaxSingleFileBytes limit of ${limit_txt}. Raise MaxSingleFileBytes or use --force to move it."
     return 1
   fi
 

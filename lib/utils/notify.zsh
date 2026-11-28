@@ -78,32 +78,100 @@ mac_ops_notify_message() {
 }
 
 # Cleanup completion notification
-# Args: same as mac_ops_notify_message
-# Do not notify if nothing was cleaned and the run did not fail. A failed run
-# (errors logged or non-zero exit status) is notified in scheduled and
-# manual mode alike; a successful one only in scheduled mode.
+# Args: same as mac_ops_notify_message, then [failure fingerprint]
+# A failed run (errors logged or non-zero exit status) is notified in
+# scheduled and manual mode alike, but the same failure (same fingerprint,
+# see mac_ops_notify_run_end) at most once per MAC_OPS_NOTIFY_REPEAT_HOURS
+# (setting Notify.FailureRepeatHours, default 24). A successful run is
+# notified only in scheduled mode and only when MAC_OPS_NOTIFY_ON_SUCCESS is
+# true (setting Notify.OnSuccess, default false).
 mac_ops_notify_completion() {
-  local message title="Mac-Ops Cleanup Completed" mode=""
-  message=$(mac_ops_notify_message "$@")
+  local message title="Mac-Ops Cleanup Completed"
+  message=$(mac_ops_notify_message "${@:1:9}")
   [[ -z "$message" ]] && return 0
   if [[ "${7:-0}" != "0" || "${9:-0}" != "0" ]]; then
-    title="Mac-Ops Run Had Errors"
-    mode="always"
+    local fingerprint="${10:-${message}}"
+    if _mac_ops_notify_failure_recent "${fingerprint}"; then
+      (( ${+functions[mac_ops_log_info]} )) && \
+        mac_ops_log_info "Failure notification not repeated: the same failure was notified within the last ${MAC_OPS_NOTIFY_REPEAT_HOURS:-24}h"
+      return 0
+    fi
+    mac_ops_notify "Mac-Ops Run Had Errors" "$message" "always"
+    _mac_ops_notify_failure_record "${fingerprint}"
+    return 0
   fi
-  mac_ops_notify "$title" "$message" "${mode}"
+  [[ "${MAC_OPS_NOTIFY_ON_SUCCESS:-false}" == "true" ]] || return 0
+  mac_ops_notify "$title" "$message"
+}
+
+# -----------------------------------------------------------------------------
+# Failure notification state: one line "<epoch> <sha256 of the fingerprint>"
+# in ${MAC_OPS_HOME}/.notify-failure.state. A missing, unreadable or corrupt
+# file means "not notified recently" (notify).
+# -----------------------------------------------------------------------------
+_mac_ops_notify_state_file() {
+  REPLY="${MAC_OPS_HOME:-${HOME}/.mac-ops}/.notify-failure.state"
+}
+
+_mac_ops_notify_hash() {
+  REPLY=$(print -rn -- "${1}" | shasum -a 256 2>/dev/null) || REPLY=""
+  REPLY="${REPLY%% *}"
+}
+
+# Return 0 when this fingerprint was notified less than the repeat interval ago
+_mac_ops_notify_failure_recent() {
+  local hours="${MAC_OPS_NOTIFY_REPEAT_HOURS:-24}" line epoch hash now
+  [[ "${hours}" =~ ^[0-9]+$ && "${hours}" -gt 0 ]] || hours=24
+  _mac_ops_notify_state_file
+  [[ -f "${REPLY}" ]] || return 1
+  line=$(head -n 1 -- "${REPLY}" 2>/dev/null) || return 1
+  epoch="${line%% *}"; hash="${line#* }"
+  [[ "${epoch}" =~ ^[0-9]+$ && "${hash}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _mac_ops_notify_hash "${1}"
+  [[ -n "${REPLY}" && "${REPLY}" == "${hash}" ]] || return 1
+  now=$(date +%s)
+  (( now >= epoch && now - epoch < hours * 3600 ))
+}
+
+# Record a notified failure (atomic: temp file in the same directory, rename)
+_mac_ops_notify_failure_record() {
+  local file tmp hash
+  _mac_ops_notify_state_file; file="${REPLY}"
+  _mac_ops_notify_hash "${1}"; hash="${REPLY}"
+  [[ -n "${hash}" && -d "${file:h}" ]] || return 0
+  tmp=$(mktemp "${file}.XXXXXX" 2>/dev/null) || return 0
+  if print -r -- "$(date +%s) ${hash}" > "${tmp}" 2>/dev/null && mv -f -- "${tmp}" "${file}" 2>/dev/null; then
+    return 0
+  fi
+  rm -f -- "${tmp}" 2>/dev/null
+  return 0
 }
 
 # End-of-run notification: counts ERROR/WARN lines written to the log since
 # line <log_start> (parallel modules included) and notifies; a run that
 # failed is notified even when nothing was cleaned.
+# The failure fingerprint is the exit status plus the distinct ERROR
+# messages of this run (timestamps removed), so the same failure every hour
+# is notified once per repeat interval and a new failure at once.
 # Args: log_start, exit_status, free_before_bytes (optional), free_after_bytes (optional)
 # Uses MAC_OPS_CLEANED_COUNT, MAC_OPS_CLEANED_BYTES, MAC_OPS_KILLED_COUNT,
 # MAC_OPS_DATA_MOVED_COUNT.
 mac_ops_notify_run_end() {
-  local log_start="$1" exit_status="${2:-0}" errors warnings
+  local log_start="$1" exit_status="${2:-0}" errors warnings fingerprint=""
   mac_ops_log_count_since "${log_start}" ERROR; errors="${REPLY}"
   mac_ops_log_count_since "${log_start}" WARN; warnings="${REPLY}"
+  if [[ "${errors}" != "0" || "${exit_status}" != "0" ]]; then
+    local start="${log_start}"
+    [[ "${start}" =~ ^[0-9]+$ ]] || start=0
+    mac_ops_log_line_count
+    (( REPLY < start )) && start=0
+    fingerprint="exit=${exit_status}"$'\n'
+    if [[ -f "${MAC_OPS_LOG_FILE}" ]]; then
+      fingerprint+=$(tail -n +$((start + 1)) "${MAC_OPS_LOG_FILE}" 2>/dev/null \
+        | sed -n 's/^\[[^]]*\] \[ERROR\] //p' | sort -u)
+    fi
+  fi
   mac_ops_notify_completion "${MAC_OPS_CLEANED_COUNT:-0}" "${MAC_OPS_CLEANED_BYTES:-0}" \
     "${MAC_OPS_KILLED_COUNT:-0}" "${3:-}" "${4:-}" "${MAC_OPS_DATA_MOVED_COUNT:-0}" \
-    "${errors}" "${warnings}" "${exit_status}"
+    "${errors}" "${warnings}" "${exit_status}" "${fingerprint}"
 }

@@ -155,8 +155,8 @@ mac_ops_cache_cleanup() {
     if [[ ${age_seconds} -ge ${threshold_seconds} ]]; then
       dir_size=$(mac_ops_get_dir_size "${bundle_dir}")
 
+      # (the guard logs the WARN with the limit, or DEBUG if it vanished)
       if ! mac_ops_check_size_guard "${bundle_dir}"; then
-        mac_ops_log_warn "Skipped due to size guard exceeded: ${bundle_name} ($(mac_ops_format_bytes ${dir_size}))"
         continue
       fi
 

@@ -265,6 +265,10 @@ Modules: a plain `mac-ops run` runs only enabled modules and logs one line for e
 | `Modules.orphan-killer.Action` | `MAC_OPS_ORPHAN_ACTION` | `report` | report / term |
 | `Monitor.RetentionDays` | `MAC_OPS_MONITOR_RETENTION_DAYS` | `7` | integer >= 1 |
 | `Monitor.KillThresholdMB` | `MAC_OPS_MONITOR_KILL_THRESHOLD_MB` | `500` | integer >= 1 |
+| `Notify.OnSuccess` | `MAC_OPS_NOTIFY_ON_SUCCESS` | `false` | true / false |
+| `Notify.FailureRepeatHours` | `MAC_OPS_NOTIFY_REPEAT_HOURS` | `24` | integer 1 to 8760 |
+
+Notifications: a failed run (an ERROR logged or a non-zero exit) shows a macOS notification, scheduled or manual. The same failure (same exit status and the same ERROR messages) is notified at most once per `Notify.FailureRepeatHours` (default 24); a different failure is notified at once. A successful scheduled run is notified only when `Notify.OnSuccess` is true. An item larger than `MaxSingleFileBytes` is skipped with a WARN naming the limit; it does not make the run fail.
 
 ### Environment Variables
 

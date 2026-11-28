@@ -74,6 +74,8 @@ MAC_OPS_SETTINGS=(
   "MAC_OPS_ORPHAN_ACTION|Modules.orphan-killer.Action|report|enum:report,term"
   "MAC_OPS_MONITOR_RETENTION_DAYS|Monitor.RetentionDays|7|int:1"
   "MAC_OPS_MONITOR_KILL_THRESHOLD_MB|Monitor.KillThresholdMB|500|int:1"
+  "MAC_OPS_NOTIFY_ON_SUCCESS|Notify.OnSuccess|false|bool"
+  "MAC_OPS_NOTIFY_REPEAT_HOURS|Notify.FailureRepeatHours|24|int:1:8760"
 )
 
 # Where each setting's effective value came from: env, file, default or cli

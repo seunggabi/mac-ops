@@ -369,7 +369,7 @@ missing=""
 for n in ${(f)names}; do
     [[ "${out}" == *"${n} "*"= "* ]] || missing+=" ${n}"
 done
-assert_eq "$(print -r -- "${names}" | grep -c .)" "39" "registry holds 39 settings"
+assert_eq "$(print -r -- "${names}" | grep -c .)" "41" "registry holds 41 settings"
 assert_eq "${missing}" "" "mac-ops config lists every registry setting"
 assert_output_contains "${out}" "$(printf '%-42s = %-12s (%s' MAC_OPS_TMP_MAX_AGE_DAYS 4 env)" "config shows env source"
 assert_output_contains "${out}" "$(printf '%-42s = %-12s (%s' MAC_OPS_ORPHAN_ACTION report default)" "config shows default source"
@@ -786,6 +786,28 @@ test_trash_bad_expire_restamped() {
 test_trash_untrusted_index_paths
 test_trash_bad_expire_restamped
 
+# An oversized item is a refusal: WARN naming the configured limit, no ERROR
+test_size_guard_warns() {
+    print "[TEST] test_size_guard_warns"
+    local f="${TEST_TMPDIR}/files/big.bin" start out rc errors
+    mkdir -p "${f:h}"
+    head -c 20000 /dev/zero > "${f}"
+    mac_ops_log_line_count; start="${REPLY}"
+    rc=0
+    out=$(MAC_OPS_MAX_SINGLE_FILE_BYTES=1024 MAC_OPS_FORCE=false mac_ops_check_size_guard "${f}" 2>&1) || rc=$?
+    assert_eq "${rc}" "1" "size guard refuses an item over the limit"
+    assert_output_contains "${out}" "[WARN] Size guard: skipped ${f}" "oversized item logged at WARN"
+    assert_output_contains "${out}" "limit of $(mac_ops_format_bytes 1024)" "message states the configured limit"
+    assert_output_not_contains "${out}" "2GB" "message does not state a fixed 2GB"
+    mac_ops_log_count_since "${start}" ERROR; errors="${REPLY}"
+    assert_eq "${errors}" "0" "oversized item counts no run error"
+    rc=0
+    out=$(mac_ops_check_size_guard "${TEST_TMPDIR}/files/vanished.bin" 2>&1) || rc=$?
+    assert_eq "${rc}/$(print -r -- "${out}" | grep -c 'ERROR')" "1/0" "vanished path: skipped without an ERROR"
+    rm -f -- "${f}"
+}
+test_size_guard_warns
+
 print ""
 
 # =============================================================================
@@ -1027,6 +1049,48 @@ test_failure_notification() {
 }
 
 test_failure_notification
+
+# The same failure is notified once per repeat interval; a new one at once;
+# a missing or corrupt state file means notify. Successful runs notify only
+# with Notify.OnSuccess.
+test_notification_dedup() {
+    print "[TEST] notification_dedup"
+    local start state="${MAC_OPS_HOME}/.notify-failure.state"
+    mkdir -p "${MAC_OPS_HOME}" "${MAC_OPS_LOG_DIR}"
+    rm -f -- "${state}"
+    _t13_fail() {
+        mac_ops_log_line_count; start="${REPLY}"
+        ( MAC_OPS_SCHEDULED=true; mac_ops_log_error "$1" )
+        : > "${OSA_CALLS}"
+        _t12_run_end "${start}" 0 >/dev/null 2>&1
+        grep -c . "${OSA_CALLS}"
+    }
+    assert_eq "$(_t13_fail "disk full at hour 1")" "1" "first failure: notified"
+    assert_eq "$([[ -f "${state}" ]] && head -n 1 "${state}" | grep -cE '^[0-9]+ [0-9a-f]{64}$')" "1" "failure state recorded as '<epoch> <sha256>'"
+    assert_eq "$(_t13_fail "disk full at hour 1")" "0" "same failure again within 24h: not notified"
+    assert_eq "$(_t13_fail "a different failure")" "1" "different failure: notified at once"
+    assert_eq "$(_t13_fail "a different failure")" "0" "that failure repeated: not notified"
+    print -r -- "garbage" > "${state}"
+    assert_eq "$(_t13_fail "a different failure")" "1" "corrupt state file: notified"
+    print -r -- "$(( $(date +%s) - 25 * 3600 )) $(cut -d' ' -f2 "${state}")" > "${state}"
+    assert_eq "$(_t13_fail "a different failure")" "1" "same failure after the repeat interval: notified again"
+    rm -f -- "${state}"
+    assert_eq "$(_t13_fail "a different failure")" "1" "missing state file: notified"
+    assert_eq "$(MAC_OPS_NOTIFY_REPEAT_HOURS=1; _t13_fail "a different failure")" "0" "repeat interval setting honoured"
+    unset -f _t13_fail
+
+    # Successful scheduled run that cleaned something: silent by default
+    : > "${OSA_CALLS}"
+    mac_ops_log_line_count; start="${REPLY}"
+    ( MAC_OPS_SCHEDULED=true MAC_OPS_CLEANED_COUNT=5 MAC_OPS_CLEANED_BYTES=100 MAC_OPS_KILLED_COUNT=0 MAC_OPS_DATA_MOVED_COUNT=0
+      mac_ops_notify_run_end "${start}" 0 1000 1000 ) >/dev/null 2>&1
+    assert_eq "$(grep -c . "${OSA_CALLS}")" "0" "successful scheduled run: no notification by default"
+    ( MAC_OPS_SCHEDULED=true MAC_OPS_NOTIFY_ON_SUCCESS=true MAC_OPS_CLEANED_COUNT=5 MAC_OPS_CLEANED_BYTES=100 MAC_OPS_KILLED_COUNT=0 MAC_OPS_DATA_MOVED_COUNT=0
+      mac_ops_notify_run_end "${start}" 0 1000 1000 ) >/dev/null 2>&1
+    assert_output_contains "$(cat "${OSA_CALLS}")" "Mac-Ops Cleanup Completed" "successful scheduled run: notified with Notify.OnSuccess=true"
+    rm -f -- "${state}"
+}
+test_notification_dedup
 unset -f osascript
 
 # =============================================================================
