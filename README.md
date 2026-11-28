@@ -163,12 +163,21 @@ mac-ops list-trash
 # Restore accidentally deleted files
 mac-ops restore ~/Library/Caches/com.important.app
 
+# List recent runs (time, exit status, items moved, data items moved)
+mac-ops runs
+
+# Undo a whole run: restore every item of it that is still in the trash
+mac-ops restore --run 20261128T101500-12345 --dry-run
+mac-ops restore --run 20261128T101500-12345
+
 # Immediately purge expired items
 mac-ops purge
 
 # Check current status (trash, disk usage, launchd status)
 mac-ops status
 ```
+
+Every run gets a run ID (`<local start time>-<pid>`, for example `20261128T101500-12345`) and a manifest at `~/.mac-ops/runs/<run-id>.json`: start and end time, exit status, ERROR/WARN counts, per-module counts, every moved path with its trash path and reason, and free space (`df -k`) before and after. A run that fails or is interrupted (ERR_EXIT, INT/TERM/HUP) still writes its manifest with its exit status. The newest 200 manifests are kept (independent of log rotation); `--dry-run` writes none. Each trash index record of a run carries its `run_id`. `mac-ops restore --run <run-id>` restores every item of that run that is still in the trash, one by one through the single-item restore: an item whose original location exists again is refused and left alone, items already restored or purged are reported as no longer in the trash, and the command exits non-zero if anything was refused or failed. It honours `--dry-run`.
 
 `mac-ops status` shows two trash figures: the indexed total (moved to trash, **pending purge** - that space is not reclaimed until the items are purged) and what the trash directory really occupies on disk. `mac-ops purge` logs the measured change in free space (`df`) next to the indexed size, because a `du` figure is not always reclaimable space (APFS clones share blocks).
 

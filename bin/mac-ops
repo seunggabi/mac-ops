@@ -76,6 +76,10 @@ Commands:
   monitor unsetup  Uninstall launchd agent
   status           Show trash status and disk usage
   restore <path>   Restore from trash to original location
+  restore --run <run-id>
+                   Restore every item of one run that is still in the trash
+                   (refuses items whose original location exists again)
+  runs             List recent runs (time, exit status, items, data items)
   list-trash       List trash contents
   purge            Purge expired trash items immediately
   install          Install launchd agent
@@ -223,9 +227,10 @@ _mac_ops_cmd_status() {
 # =============================================================================
 _mac_ops_cmd_restore() {
   local restore_path="${1:-}"
+  local run_id="${2:-}"
 
-  if [[ -z "${restore_path}" ]]; then
-    mac_ops_log_error "Usage: mac-ops restore <path>"
+  if [[ -z "${restore_path}" && -z "${run_id}" ]]; then
+    mac_ops_log_error "Usage: mac-ops restore <path> | mac-ops restore --run <run-id>"
     return 1
   fi
 
@@ -233,7 +238,20 @@ _mac_ops_cmd_restore() {
   if [[ "${MAC_OPS_DRY_RUN}" != "true" ]]; then
     mac_ops_init_dirs
   fi
-  mac_ops_trash_restore "${restore_path}"
+  if [[ -n "${run_id}" ]]; then
+    mac_ops_trash_restore_run "${run_id}"
+  else
+    mac_ops_trash_restore "${restore_path}"
+  fi
+}
+
+# =============================================================================
+# runs command
+# =============================================================================
+_mac_ops_cmd_runs() {
+  # Read-only: no directory creation
+  mac_ops_load_config || return 1
+  mac_ops_runs_list "${1:-20}"
 }
 
 # =============================================================================
@@ -525,6 +543,8 @@ _mac_ops_main() {
   local command="run"
   local module_name=""
   local restore_path=""
+  local restore_run=""
+  local runs_count=""
   local -a monitor_subcmd=()
 
   # Parse arguments
@@ -562,9 +582,27 @@ _mac_ops_main() {
       restore)
         command="restore"
         shift
-        # Capture path argument after restore
-        if [[ $# -gt 0 && "${1}" != --* ]]; then
+        # Capture path argument after restore, or --run <run-id>
+        if [[ $# -gt 0 && "${1}" == "--run" ]]; then
+          if [[ $# -lt 2 ]]; then
+            print -- "[ERROR] restore --run needs a run ID (see: mac-ops runs)" >&2
+            return 1
+          fi
+          restore_run="${2}"
+          shift 2
+        elif [[ $# -gt 0 && "${1}" == --run=* ]]; then
+          restore_run="${1#--run=}"
+          shift
+        elif [[ $# -gt 0 && "${1}" != --* ]]; then
           restore_path="${1}"
+          shift
+        fi
+        ;;
+      runs)
+        command="runs"
+        shift
+        if [[ $# -gt 0 && "${1}" =~ ^[0-9]+$ ]]; then
+          runs_count="${1}"
           shift
         fi
         ;;
@@ -622,7 +660,10 @@ _mac_ops_main() {
       _mac_ops_cmd_status
       ;;
     restore)
-      _mac_ops_cmd_restore "${restore_path}"
+      _mac_ops_cmd_restore "${restore_path}" "${restore_run}"
+      ;;
+    runs)
+      _mac_ops_cmd_runs "${runs_count}"
       ;;
     list-trash)
       _mac_ops_cmd_list_trash

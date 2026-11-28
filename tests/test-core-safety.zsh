@@ -813,6 +813,7 @@ print "[TEST] run_lock_and_exit_handling"
 _ta_run() {
     fx_zsh MAC_OPS_SCHEDULED=true -- "
         source \"\${MAC_OPS_ROOT}/lib/core/lock.zsh\"
+        source \"\${MAC_OPS_ROOT}/lib/core/trash.zsh\"
         source \"\${MAC_OPS_ROOT}/lib/core/run.zsh\"
         source \"\${MAC_OPS_ROOT}/lib/utils/format.zsh\"
         source \"\${MAC_OPS_ROOT}/lib/utils/notify.zsh\"
@@ -848,6 +849,7 @@ test_run_errexit_abort() {
     assert_eq "$([[ -e "${FX_OPS}/mac-ops.lock" ]] && print held || print released)" "released" "ERR_EXIT abort: lock released"
     assert_output_contains "$(cat "${TA_LOG}" 2>/dev/null)" "Run aborted (command failed, exit status 1)" "ERR_EXIT abort: failure logged"
     assert_output_contains "$(cat "${FX_OPS}/osa.calls" 2>/dev/null)" "Run failed (exit status 1)" "ERR_EXIT abort: scheduled failure notification sent"
+    assert_output_contains "$(cat "${FX_OPS}"/runs/*.json 2>/dev/null)" '"exit_status": 1,' "ERR_EXIT abort: manifest records the failure"
 }
 
 test_run_errexit_ignored_where_off() {
@@ -886,6 +888,140 @@ test_run_errexit_abort
 test_run_errexit_ignored_where_off
 test_run_term_signal
 test_run_explicit_exit
+
+# =============================================================================
+# Run manifest, "runs" and "restore --run" (item 8)
+# =============================================================================
+print "[TEST] run_manifest_and_restore_run"
+source "${MAC_OPS_ROOT}/lib/core/run.zsh"
+source "${MAC_OPS_ROOT}/lib/utils/notify.zsh"
+
+# Sourced libs in a fresh zsh under ERR_EXIT, same fixture environment
+_tb_zsh() {
+    zsh -f -c "
+        setopt ERR_EXIT PIPE_FAIL
+        MAC_OPS_ROOT='${MAC_OPS_ROOT}'
+        for f in core/config core/logger core/lock core/trash core/safety core/run utils/format utils/notify; do
+            source \"\${MAC_OPS_ROOT}/lib/\${f}.zsh\"
+        done
+        $1"
+}
+
+# Is a file valid JSON? (plutil parses JSON input)
+_tb_json_ok() {
+    plutil -convert xml1 -o /dev/null "$1" >/dev/null 2>&1 && print valid || print invalid
+}
+
+test_run_manifest() {
+    _t5_reset_trash
+    rm -rf -- "${MAC_OPS_HOME}/runs"
+    local base="${HOME}/b8"
+    local data_dir="${HOME}/Library/Application Support/B8App"
+    rm -rf -- "${base}" "${data_dir}"
+    mkdir -p "${base}" "${data_dir}"
+    print a > "${base}/a.txt"
+    print b > "${base}/b"$'\t'"tab.txt"
+    print c > "${data_dir}/c.txt"
+
+    mac_ops_run_start
+    local run_id="${MAC_OPS_RUN_ID}"
+    assert_eq "$([[ "${run_id}" =~ ^[0-9]{8}T[0-9]{6}-[0-9]+$ ]] && print ok)" "ok" "run ID is <timestamp>-<pid>"
+    # Parallel subshells append to the same move list
+    ( mac_ops_trash_move "${base}/a.txt" "test" "mod-a" >/dev/null 2>&1 ) &
+    ( mac_ops_trash_move "${base}/b"$'\t'"tab.txt" "test" "mod-b" >/dev/null 2>&1 ) &
+    wait
+    mac_ops_trash_move "${data_dir}/c.txt" "test" "mod-a" >/dev/null 2>&1
+    mac_ops_run_finish 0 >/dev/null 2>&1
+
+    local manifest="${MAC_OPS_HOME}/runs/${run_id}.json"
+    assert_eq "$([[ -f "${manifest}" ]] && print yes)" "yes" "manifest written to runs/<run-id>.json"
+    assert_eq "$(_tb_json_ok "${manifest}")" "valid" "manifest is valid JSON (tab in a path escaped)"
+    mac_ops_run_manifest_read "${manifest}"
+    assert_eq "${MAC_OPS_MANIFEST[exit_status]}" "0" "manifest: exit status"
+    assert_eq "${MAC_OPS_MANIFEST[items_moved]}" "3" "manifest: every move of the parallel subshells listed"
+    assert_eq "${MAC_OPS_MANIFEST[data_items_moved]}" "1" "manifest: data item counted"
+    assert_output_contains "$(cat "${manifest}")" '"mod-a": {"items": 2' "manifest: per-module counts"
+    assert_output_contains "$(cat "${manifest}")" "\"original_path\": \"${data_dir}/c.txt\"" "manifest: moved path listed"
+    assert_output_contains "$(cat "${manifest}")" '"free_kb_before": ' "manifest: free space before"
+    assert_eq "$(ls "${MAC_OPS_HOME}/.tmp" 2>/dev/null | grep -c '\.moves$')" "0" "move list removed after the manifest is written"
+    assert_eq "$(grep -c "\"run_id\": \"${run_id}\"" "${MAC_OPS_INDEX_FILE}")" "3" "index records carry the run ID"
+
+    # runs lists it
+    local out
+    out=$(mac_ops_runs_list)
+    assert_output_contains "${out}" "${run_id}" "runs lists the run"
+    assert_output_contains "$(print -r -- "${out}" | grep "${run_id}")" " ok " "runs shows its status"
+
+    # Dry-run restore changes nothing
+    out=$(MAC_OPS_DRY_RUN=true _tb_zsh "mac_ops_trash_restore_run '${run_id}'" 2>&1)
+    assert_output_contains "${out}" "3 would be restored" "restore --run --dry-run reports"
+    assert_eq "$([[ -e "${base}/a.txt" ]] && print restored || print in-trash)" "in-trash" "restore --run --dry-run moves nothing"
+
+    # One destination exists again: refused, the others restored, non-zero exit
+    print new > "${base}/a.txt"
+    local rc=0
+    out=$(_tb_zsh "mac_ops_trash_restore_run '${run_id}'" 2>&1) || rc=$?
+    assert_eq "${rc}" "1" "restore --run exits non-zero when an item is refused"
+    assert_output_contains "${out}" "REFUSED (destination exists): ${base}/a.txt" "existing destination refused"
+    assert_eq "$(cat "${base}/a.txt")" "new" "refused destination left untouched"
+    assert_eq "$(cat "${data_dir}/c.txt" 2>/dev/null)" "c" "data item restored"
+    assert_eq "$(cat "${base}/b"$'\t'"tab.txt" 2>/dev/null)" "b" "item with a tab in its name restored"
+    assert_output_contains "${out}" "2 restored, 1 refused, 0 failed" "restore --run summary"
+
+    # Again: restored items are no longer in the trash, nothing fails
+    rm -f "${base}/a.txt"
+    rc=0
+    out=$(_tb_zsh "mac_ops_trash_restore_run '${run_id}'" 2>&1) || rc=$?
+    assert_eq "${rc}" "0" "second restore --run succeeds"
+    assert_output_contains "${out}" "1 restored, 0 refused, 0 failed, 2 no longer in the trash" "items already restored are reported, not failed"
+
+    rc=0
+    _tb_zsh "mac_ops_trash_restore_run '../etc/x'" >/dev/null 2>&1 || rc=$?
+    assert_eq "${rc}" "1" "restore --run rejects a malformed run ID"
+    rm -rf -- "${base}" "${data_dir}"
+}
+
+test_run_manifest_dry_run() {
+    _t5_reset_trash
+    rm -rf -- "${MAC_OPS_HOME}/runs" "${MAC_OPS_HOME}/.tmp"
+    local base="${HOME}/b8dry"
+    mkdir -p "${base}"; print x > "${base}/x.txt"
+    (
+        export MAC_OPS_DRY_RUN=true
+        mac_ops_run_start
+        mac_ops_trash_move "${base}/x.txt" "test" "mod-a" >/dev/null 2>&1
+        mac_ops_run_finish 0 >/dev/null 2>&1
+    )
+    assert_eq "$(ls "${MAC_OPS_HOME}/runs" 2>/dev/null | wc -l | tr -d ' ')" "0" "dry-run: no manifest"
+    assert_eq "$(ls "${MAC_OPS_HOME}/.tmp" 2>/dev/null | wc -l | tr -d ' ')" "0" "dry-run: no move list"
+    assert_eq "$([[ -f "${base}/x.txt" ]] && print kept)" "kept" "dry-run: nothing moved"
+    rm -rf -- "${base}"
+}
+
+test_run_manifest_retention() {
+    rm -rf -- "${MAC_OPS_HOME}/runs"
+    mkdir -p "${MAC_OPS_HOME}/runs"
+    local i
+    for i in 1 2 3 4 5; do
+        print '{"run_id": "x"}' > "${MAC_OPS_HOME}/runs/2000010${i}T000000-1.json"
+    done
+    (
+        MAC_OPS_RUNS_KEEP=3
+        mac_ops_run_start
+        mac_ops_run_finish 0 >/dev/null 2>&1
+        print -r -- "${MAC_OPS_RUN_ID}" > "${MAC_OPS_HOME}/.last_id"
+    )
+    local -a left
+    left=("${MAC_OPS_HOME}/runs"/*.json(N:t))
+    assert_eq "${#left}" "3" "only the newest MAC_OPS_RUNS_KEEP manifests are kept"
+    assert_eq "${left[-1]}" "$(cat "${MAC_OPS_HOME}/.last_id").json" "the new manifest is kept"
+    assert_eq "${left[1]}" "20000104T000000-1.json" "the oldest manifests are removed"
+    rm -f "${MAC_OPS_HOME}/.last_id"
+}
+
+test_run_manifest
+test_run_manifest_dry_run
+test_run_manifest_retention
 
 # --- Teardown ---
 rm -rf "${TEST_TMPDIR}"

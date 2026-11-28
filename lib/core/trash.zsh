@@ -16,6 +16,8 @@ typeset -gA _MAC_OPS_IDX_SIZE
 typeset -gA _MAC_OPS_IDX_EXPIRE
 typeset -gA _MAC_OPS_IDX_SOURCE
 typeset -gA _MAC_OPS_IDX_ORIGTIME
+# Run that moved the entry (optional field; older records have none)
+typeset -gA _MAC_OPS_IDX_RUNID
 typeset -ga _MAC_OPS_IDX_KEYS
 
 # Index lock file (fcntl lock via "zsystem flock"; the file itself is never
@@ -199,6 +201,61 @@ _mac_ops_json_escape() {
 }
 
 # -----------------------------------------------------------------------------
+# Escape a string for JSON including control characters (newline, tab, ...),
+# so the result is always one valid line. Result in REPLY.
+# Used for the run manifest; the index keeps _mac_ops_json_escape.
+# -----------------------------------------------------------------------------
+_mac_ops_json_escape_line() {
+  _mac_ops_json_escape "${1}"
+  local str="${REPLY}"
+  str="${str//$'\n'/\\n}"
+  str="${str//$'\r'/\\r}"
+  str="${str//$'\t'/\\t}"
+  if [[ "${str}" == *[[:cntrl:]]* ]]; then
+    local out="" c u i
+    for (( i = 1; i <= ${#str}; i++ )); do
+      c="${str[i]}"
+      if [[ "${c}" == [[:cntrl:]] ]]; then
+        printf -v u '\\u%04x' "'${c}"
+        out+="${u}"
+      else
+        out+="${c}"
+      fi
+    done
+    str="${out}"
+  fi
+  REPLY="${str}"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Record a completed move in the current run's move list (one line per move,
+# appended under the index lock, so parallel modules never interleave).
+# Fields (tab-separated, JSON-escaped): module, size, data (0/1), original
+# path, trash path, reason. No-op outside a run and in dry-run.
+# Usage: _mac_ops_trash_note_run_move <orig> <trash> <reason> <module> <size> <data true|false>
+# -----------------------------------------------------------------------------
+_mac_ops_trash_note_run_move() {
+  [[ -n "${MAC_OPS_RUN_MOVES_FILE:-}" ]] || return 0
+  _mac_ops_is_dry_run && return 0
+  local e_orig e_trash e_reason e_module data=0
+  [[ "${6}" == "true" ]] && data=1
+  _mac_ops_json_escape_line "${1}"; e_orig="${REPLY}"
+  _mac_ops_json_escape_line "${2}"; e_trash="${REPLY}"
+  _mac_ops_json_escape_line "${3}"; e_reason="${REPLY}"
+  _mac_ops_json_escape_line "${4}"; e_module="${REPLY}"
+  if ! _mac_ops_index_lock; then
+    mac_ops_log_warn "Move not recorded in the run manifest (index lock unavailable): ${1}"
+    return 0
+  fi
+  print -r -- "${e_module}"$'\t'"${5:-0}"$'\t'"${data}"$'\t'"${e_orig}"$'\t'"${e_trash}"$'\t'"${e_reason}" \
+    >> "${MAC_OPS_RUN_MOVES_FILE}" 2>/dev/null \
+    || mac_ops_log_warn "Move not recorded in the run manifest: ${1}"
+  _mac_ops_index_unlock
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # Extract a JSON string value from a line like:  "key": "value",
 # Result in REPLY (no subshell: the index is parsed while holding the lock,
 # and a fork per field made large indexes take longer than the lock timeout)
@@ -308,6 +365,10 @@ _mac_ops_index_parse_file() {
           _mac_ops_json_extract_string "${trimmed}"
           _MAC_OPS_IDX_ORIGTIME[${current_key}]="${REPLY}"
           ;;
+        '"run_id":'*)
+          _mac_ops_json_extract_string "${trimmed}"
+          _MAC_OPS_IDX_RUNID[${current_key}]="${REPLY}"
+          ;;
         '}'*) # matches both '}' and '},'
           current_key=""
           ;;
@@ -332,6 +393,7 @@ _mac_ops_index_reset() {
   _MAC_OPS_IDX_EXPIRE=()
   _MAC_OPS_IDX_SOURCE=()
   _MAC_OPS_IDX_ORIGTIME=()
+  _MAC_OPS_IDX_RUNID=()
   return 0
 }
 
@@ -441,6 +503,10 @@ mac_ops_index_write() {
         _mac_ops_json_escape "${_MAC_OPS_IDX_ORIGTIME[${key}]}"
         printf '      "original_time": "%s",\n' "${REPLY}"
       fi
+      if [[ -n "${_MAC_OPS_IDX_RUNID[${key}]}" ]]; then
+        _mac_ops_json_escape "${_MAC_OPS_IDX_RUNID[${key}]}"
+        printf '      "run_id": "%s",\n' "${REPLY}"
+      fi
       printf '      "expire_after": "%s"\n' "${_MAC_OPS_IDX_EXPIRE[${key}]}"
       printf '    }'
     done
@@ -488,6 +554,8 @@ _mac_ops_index_add_locked() {
   _MAC_OPS_IDX_EXPIRE[${key}]="${8}"
   _MAC_OPS_IDX_SOURCE[${key}]="${9:-}"
   _MAC_OPS_IDX_ORIGTIME[${key}]="${10:-}"
+  # A record written during a run carries its run ID (restore --run)
+  _MAC_OPS_IDX_RUNID[${key}]="${MAC_OPS_RUN_ID:-}"
 
   if ! mac_ops_index_write; then
     return 1
@@ -535,6 +603,7 @@ _mac_ops_index_forget() {
     unset "_MAC_OPS_IDX_EXPIRE[${key}]"
     unset "_MAC_OPS_IDX_SOURCE[${key}]"
     unset "_MAC_OPS_IDX_ORIGTIME[${key}]"
+    unset "_MAC_OPS_IDX_RUNID[${key}]"
   done
 
   local -a new_keys
@@ -1168,6 +1237,7 @@ mac_ops_trash_move() {
       "${now_iso}" "${size_bytes}" "${expires_iso}"; then
       mac_ops_log_warn "Moved but not indexed (reconcile will re-index it): ${trash_path}"
     fi
+    _mac_ops_trash_note_run_move "${abs_source}" "${trash_path}" "${reason}" "${module_name}" "${size_bytes}" "${data_move}"
     _mac_ops_index_unlock
     mac_ops_log_info "Moved to trash: ${abs_source} (${size_bytes} bytes, reason: ${reason})"
     [[ "${data_move}" == true ]] && _mac_ops_note_data_move "${abs_source}" "${reason}" "${module_name}"
@@ -1252,6 +1322,7 @@ mac_ops_trash_move() {
   if [[ -e "${abs_source}" || -L "${abs_source}" ]]; then
     mac_ops_log_warn "Copied to trash but source could not be removed completely: ${abs_source}"
   fi
+  _mac_ops_trash_note_run_move "${abs_source}" "${trash_path}" "${reason}" "${module_name}" "${size_bytes}" "${data_move}"
 
   mac_ops_log_info "Moved to trash: ${abs_source} (${size_bytes} bytes, reason: ${reason})"
   [[ "${data_move}" == true ]] && _mac_ops_note_data_move "${abs_source}" "${reason}" "${module_name}"
@@ -1973,6 +2044,22 @@ mac_ops_trash_restore() {
     return 1
   fi
 
+  local rc=0
+  _mac_ops_trash_restore_key_locked "${found_key}" "${original_path}" || rc=1
+  _mac_ops_index_unlock
+  return ${rc}
+}
+
+# -----------------------------------------------------------------------------
+# Restore one index entry to its original path. The caller holds the index
+# lock and has loaded the index. Refuses when the destination exists.
+# Usage: _mac_ops_trash_restore_key_locked <key> [original_path]
+# REPLY: restored | dry-run | missing (no longer in the trash) | exists
+#        (destination exists, refused) | failed. Returns 0 for restored/dry-run.
+# -----------------------------------------------------------------------------
+_mac_ops_trash_restore_key_locked() {
+  local found_key="${1}"
+  local original_path="${2:-${_MAC_OPS_IDX_ORIG[${1}]}}"
   local trash_path="${_MAC_OPS_IDX_TRASH[${found_key}]}"
 
   if [[ -z "${trash_path}" ]] || [[ ! -e "${trash_path}" && ! -L "${trash_path}" ]]; then
@@ -1980,20 +2067,20 @@ mac_ops_trash_restore() {
     # Remove dangling entry
     _mac_ops_index_forget "${found_key}"
     mac_ops_index_write || true
-    _mac_ops_index_unlock
+    REPLY="missing"
     return 1
   fi
 
   # Abort if file already exists at original location
   if [[ -e "${original_path}" || -L "${original_path}" ]]; then
-    _mac_ops_index_unlock
     mac_ops_log_error "File already exists at original location: ${original_path}"
+    REPLY="exists"
     return 1
   fi
 
   if _mac_ops_is_dry_run; then
-    _mac_ops_index_unlock
     mac_ops_log_info "[DRY_RUN] Will restore: ${trash_path} -> ${original_path}"
+    REPLY="dry-run"
     return 0
   fi
 
@@ -2005,8 +2092,8 @@ mac_ops_trash_restore() {
 
   # Execute restore
   if ! mv "${trash_path}" "${original_path}" 2>/dev/null; then
-    _mac_ops_index_unlock
     mac_ops_log_error "Restore failed: ${trash_path} -> ${original_path}"
+    REPLY="failed"
     return 1
   fi
 
@@ -2017,10 +2104,11 @@ mac_ops_trash_restore() {
   # Clean up empty directories
   find "${MAC_OPS_TRASH_DIR}" -mindepth 1 -type d -empty -delete 2>/dev/null || true
 
-  _mac_ops_index_unlock
   mac_ops_log_info "Restore completed: ${original_path}"
+  REPLY="restored"
   return 0
 }
+
 mac_ops_trash_list() {
   mac_ops_index_read
 
