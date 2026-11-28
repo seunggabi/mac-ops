@@ -73,7 +73,7 @@ Enabled by default: `cache`, `tmp`, `log`, `orphan-app`. The others are off unti
 | Module | Description |
 |--------|-------------|
 | `cache` | Clean `~/Library/Caches` (Apple system caches excluded) |
-| `tmp` | Clean `/tmp`, `/private/var/folders`, CrashReporter |
+| `tmp` | Clean `/private/var/folders` (your T, C and X areas) and CrashReporter. `/tmp` itself is not scanned: the scan root `/tmp` is a symbolic link to `/private/tmp`, which `find` does not follow |
 | `log` | Clean `~/Library/Logs`, system diagnostic reports |
 | `zombie` | Report zombie processes (opt-in: send SIGCHLD to eligible parents; never SIGTERM/SIGKILL) |
 | `orphan` | Report orphan process candidates (sends SIGTERM only with `MAC_OPS_ORPHAN_ACTION=term`, never SIGKILL) |
@@ -461,7 +461,7 @@ mac-ops run --dry-run
 |------|--------|
 | `/System/*`, `/bin/*`, `/sbin/*`, `/usr/*` | SIP protected |
 | `~/Library/Keychains/*` | Keychains (passwords, certificates) |
-| `~/Library/Preferences/*` | User preferences |
+| `~/Library/Preferences/*` | User preferences. Exception: orphan-app may move the plist of an app that is no longer installed, only with `Modules.orphan-app-cleanup.DataAction` = `trash` (default `report`: listed, never moved) |
 | `~/Documents/*`, `~/Desktop/*`, `~/Downloads/*` | User documents |
 | `/Library/LaunchDaemons/*`, `/Library/LaunchAgents/*` | System services |
 
@@ -470,7 +470,8 @@ mac-ops run --dry-run
 ```
 kernel_task, launchd, WindowServer, loginwindow,
 SystemUIServer, Finder, Dock, cfprefsd, mds, mds_stores,
-coreaudiod, opendirectoryd
+coreaudiod, opendirectoryd, diskarbitrationd, configd,
+UserEventAgent, trustd, securityd, syslogd, notifyd, logd, powerd
 ```
 
 ### Docker Module
