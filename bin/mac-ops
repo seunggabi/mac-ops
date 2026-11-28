@@ -361,8 +361,17 @@ _mac_ops_install_agent() {
       -e "s|REPLACEME_MAC_OPS_HOME|${home_path}|g" \
       "${plist_src}" > "${plist_dst}"
 
-  # 4. launchctl load
-  launchctl load "${plist_dst}" 2>/dev/null || true
+  # 4. launchctl load. A failure is an error: the agent would silently never
+  #    run. launchctl load can exit 0 and only print the failure, so its
+  #    output is checked, then the label must be listed as loaded.
+  local label="${plist_name%.plist}" load_out="" load_rc=0
+  load_out=$(launchctl load "${plist_dst}" 2>&1) || load_rc=$?
+  if (( load_rc != 0 )) || [[ "${load_out:l}" == *"load failed"* || "${load_out:l}" == *error* ]] \
+    || ! launchctl list "${label}" >/dev/null 2>&1; then
+    mac_ops_log_error "launchctl load failed for ${plist_dst} (exit ${load_rc}${load_out:+: ${load_out}}); the agent is NOT running. Fix the cause, then: launchctl load ${plist_dst}"
+    REPLY="${bin_path}"
+    return 1
+  fi
 
   REPLY="${bin_path}"
   return 0

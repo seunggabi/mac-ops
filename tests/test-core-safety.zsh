@@ -973,6 +973,50 @@ test_cache_cleanup_names() {
 }
 test_cache_cleanup_names
 
+# install / monitor setup: a failed launchctl load is an error with a
+# non-zero exit. launchctl is a shell function here, never the real one.
+test_install_launchctl_failure() {
+    print "[TEST] test_install_launchctl_failure"
+    local fx="${TEST_TMPDIR}/installfx" out mode
+    for mode in loadfail rcfail notlisted ok; do
+        mkdir -p "${fx}/${mode}/home"
+        out=$(HOME="${fx}/${mode}/home" zsh -f -c '
+            MAC_OPS_ROOT="$1"; mode="$2"; calls="$3"
+            export MAC_OPS_HOME="${HOME}/.mac-ops" MAC_OPS_LOG_DIR="${HOME}/.mac-ops/.logs"
+            export MAC_OPS_DRY_RUN=false MAC_OPS_SCHEDULED=false
+            source "${MAC_OPS_ROOT}/lib/core/config.zsh"; source "${MAC_OPS_ROOT}/lib/core/logger.zsh"
+            launchctl() {
+                print -r -- "$*" >> "${calls}"
+                case "$1:${mode}" in
+                    load:loadfail) print "Load failed: 5: Input/output error"; return 0 ;;
+                    load:rcfail) return 3 ;;
+                    list:notlisted|list:loadfail|list:rcfail) return 1 ;;
+                esac
+                return 0
+            }
+            [[ "$(whence -w launchctl)" == "launchctl: function" ]] || { print "REAL_LAUNCHCTL"; exit 9; }
+            source <(sed -n -e "/^_mac_ops_agent_bin_path() {/,/^}/p" -e "/^_mac_ops_install_agent() {/,/^}/p"                 -e "/^_mac_ops_cmd_install() {/,/^}/p" -e "/^_mac_ops_cmd_monitor() {/,/^}/p" "${MAC_OPS_ROOT}/bin/mac-ops")
+            n=0
+            rc=0; o=$(_mac_ops_cmd_install 2>&1) || rc=$?; print "install_rc=${rc}"
+            [[ "${o}" == *"[ERROR] launchctl load failed"* ]] && n=$((n + 1))
+            rc=0; o=$(_mac_ops_cmd_monitor setup 2>&1) || rc=$?; print "monitor_rc=${rc}"
+            [[ "${o}" == *"[ERROR] launchctl load failed"* ]] && n=$((n + 1))
+            print "${n}"
+        ' _ "${MAC_OPS_ROOT}" "${mode}" "${fx}/${mode}/calls" 2>&1)
+        assert_output_not_contains "${out}" "REAL_LAUNCHCTL" "${mode}: launchctl is the test function"
+        if [[ "${mode}" == ok ]]; then
+            assert_output_contains "${out}" "install_rc=0" "launchctl load ok: install exits 0"
+            assert_output_contains "${out}" "monitor_rc=0" "launchctl load ok: monitor setup exits 0"
+        else
+            assert_output_contains "${out}" "install_rc=1" "${mode}: install exits non-zero"
+            assert_output_contains "${out}" "monitor_rc=1" "${mode}: monitor setup exits non-zero"
+            assert_eq "${out##*$'\n'}" "2" "${mode}: failure logged as ERROR for both agents"
+        fi
+        assert_output_contains "$(cat "${fx}/${mode}/calls" 2>/dev/null)" "load ${fx}/${mode}/home/Library/LaunchAgents/com.mac-ops.cleanup.plist" "${mode}: load called on the fixture plist"
+    done
+}
+test_install_launchctl_failure
+
 print ""
 
 # =============================================================================
