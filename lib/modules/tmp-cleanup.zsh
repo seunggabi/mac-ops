@@ -127,7 +127,11 @@ _mac_ops_fc_guard() {
   local hit=""
   local rc=0
 
-  if _mac_ops_fc_is_security_path "${item}"; then
+  # Fail closed: without the security keyword check (security-keywords.zsh
+  # not loaded) nothing may be moved
+  if ! (( ${+functions[_mac_ops_fc_is_security_path]} )); then
+    reason="security software check unavailable"
+  elif _mac_ops_fc_is_security_path "${item}"; then
     reason="security software path"
   elif [[ -S "${item}" ]]; then
     reason="socket"

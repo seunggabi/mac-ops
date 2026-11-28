@@ -1401,6 +1401,48 @@ test_restore_destination_race
 test_index_control_char_names
 test_status_cli_alert
 
+# =============================================================================
+# Security keyword check missing: every caller fails closed
+# security-keywords.zsh is deliberately not sourced; only the predicates are
+# called (no module entry point, no process is signalled)
+# =============================================================================
+print "[TEST] security_check_missing_fails_closed"
+
+test_security_check_missing() {
+    local fx="${TEST_TMPDIR}/seccheck" out
+    rm -rf -- "${fx}"
+    mkdir -p "${fx}/Caches/com.example.plainapp"
+    print x > "${fx}/plain.txt"
+    out=$(HOME="${fx}" zsh -f -c '
+        MAC_OPS_ROOT="$1"; fx="$2"
+        export MAC_OPS_HOME="${fx}/ops" MAC_OPS_LOG_DIR="${fx}/ops/.logs" MAC_OPS_TRASH_DIR="${fx}/ops/.trash"
+        export MAC_OPS_DRY_RUN=false MAC_OPS_SCHEDULED=false
+        for f in core/config core/logger core/trash core/safety core/ignore utils/running; do
+            source "${MAC_OPS_ROOT}/lib/${f}.zsh"
+        done
+        source "${MAC_OPS_ROOT}/lib/modules/tmp-cleanup.zsh"
+        source "${MAC_OPS_ROOT}/lib/modules/orphan-killer.zsh"
+        source "${MAC_OPS_ROOT}/lib/modules/orphan-app-cleanup.zsh"
+        (( ${+functions[_mac_ops_fc_is_security_path]} )) && print "HELPER_PRESENT"
+        _MAC_OPS_FC_OPEN_PATHS=$'"'"'\n'"'"'
+        _mac_ops_fc_guard "${fx}/plain.txt" tmp-cleanup && print "guard=allowed" || print "guard=refused"
+        typeset -gA _MAC_OPS_ORPHAN_PPID _MAC_OPS_ORPHAN_EXE
+        _MAC_OPS_ORPHAN_PPID[99999]=1
+        _MAC_OPS_ORPHAN_EXE[99999]="/usr/local/bin/plainproc"
+        _mac_ops_orphan_in_own_tree() { return 1; }
+        _mac_ops_orphan_classify 99999 && print "orphan=candidate" || print "orphan=not-candidate:${_MAC_OPS_ORPHAN_REASON}"
+        _mac_ops_orphan_app_process_entry "${fx}/Caches/com.example.plainapp" com.example.plainapp "${fx}/Caches" data
+        print "orphan_app=${_MAC_OPS_ORPHAN_APP_RESULT}"
+    ' _ "${MAC_OPS_ROOT}" "${fx}" 2>&1)
+    assert_output_not_contains "${out}" "HELPER_PRESENT" "security check helper is not loaded in this fixture"
+    assert_output_contains "${out}" "guard=refused" "tmp/log/cache guard refuses a move without the security check"
+    assert_output_contains "${out}" "orphan=not-candidate:security software check unavailable" "orphan-killer: no candidate without the security check"
+    assert_output_contains "${out}" "orphan_app=skipped" "orphan-app: entry skipped without the security check"
+    assert_eq "$([[ -d "${fx}/Caches/com.example.plainapp" && -f "${fx}/plain.txt" ]] && print kept)" "kept" "nothing moved without the security check"
+    rm -rf -- "${fx}"
+}
+test_security_check_missing
+
 # --- Teardown ---
 rm -rf "${TEST_TMPDIR}"
 

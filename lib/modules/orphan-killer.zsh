@@ -517,6 +517,12 @@ _mac_ops_orphan_classify() {
     return 1
   fi
 
+  # Fail closed: without the security keyword check (security-keywords.zsh
+  # not loaded) no process is a candidate
+  if ! (( ${+functions[_mac_ops_fc_is_security_path]} )); then
+    _MAC_OPS_ORPHAN_REASON="security software check unavailable"
+    return 1
+  fi
   if _mac_ops_fc_is_security_path "${exe}"; then
     _MAC_OPS_ORPHAN_REASON="security software"
     return 1

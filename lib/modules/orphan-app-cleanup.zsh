@@ -596,7 +596,13 @@ _mac_ops_orphan_app_process_entry() {
     return 0
   fi
 
-  # Security software is never touched, whatever its bundle ID prefix is
+  # Security software is never touched, whatever its bundle ID prefix is.
+  # Fail closed: without the check (security-keywords.zsh not loaded) the
+  # entry is left alone
+  if ! (( ${+functions[_mac_ops_fc_is_security_path]} )); then
+    mac_ops_log_warn "Security software check unavailable (security-keywords.zsh not loaded), skipped: ${item}"
+    return 0
+  fi
   if _mac_ops_fc_is_security_path "${item_name}"; then
     mac_ops_log_debug "Security software keyword protected: ${item_name}"
     return 0
