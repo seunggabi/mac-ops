@@ -128,7 +128,6 @@ source "${MAC_OPS_ROOT}/lib/core/lock.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/core/trash.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/core/safety.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/core/disk.zsh" 2>/dev/null || load_error=1
-source "${MAC_OPS_ROOT}/lib/utils/plist-helper.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/utils/format.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/utils/security-keywords.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/utils/running.zsh" 2>/dev/null || load_error=1

@@ -289,7 +289,6 @@ source "${MAC_OPS_ROOT}/lib/core/lock.zsh"
 source "${MAC_OPS_ROOT}/lib/core/trash.zsh"
 source "${MAC_OPS_ROOT}/lib/core/safety.zsh"
 source "${MAC_OPS_ROOT}/lib/core/disk.zsh"
-source "${MAC_OPS_ROOT}/lib/utils/plist-helper.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/format.zsh"
 
 # Initialize directories

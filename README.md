@@ -521,7 +521,6 @@ mac-ops/
 │       ├── format.zsh             # Size formatting, colors, run report
 │       ├── notify.zsh             # macOS notifications
 │       ├── parallel.zsh           # Wait for parallel modules with a timeout
-│       ├── plist-helper.zsh
 │       ├── running.zsh            # Running process / running app detection
 │       ├── security-keywords.zsh  # Security software keywords (never touched)
 │       └── snapshot.zsh           # Disk/memory snapshot before and after a run
