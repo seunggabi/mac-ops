@@ -73,7 +73,7 @@ Enabled by default: `cache`, `tmp`, `log`, `orphan-app`. The others are off unti
 | Module | Description |
 |--------|-------------|
 | `cache` | Clean `~/Library/Caches` (Apple system caches excluded) |
-| `tmp` | Clean `/tmp`, `/private/var/folders`, CrashReporter |
+| `tmp` | Clean your own old files in `/private/var/folders` and CrashReporter. `/tmp` is configured as a scan root but is not scanned today: it is a symlink to `/private/tmp` and `find` does not follow a symlinked root |
 | `log` | Clean `~/Library/Logs`, system diagnostic reports |
 | `zombie` | Report zombie processes (opt-in: send SIGCHLD to eligible parents; never SIGTERM/SIGKILL) |
 | `orphan` | Report orphan process candidates (sends SIGTERM only with `MAC_OPS_ORPHAN_ACTION=term`, never SIGKILL) |
@@ -457,7 +457,7 @@ mac-ops run --dry-run
 |------|--------|
 | `/System/*`, `/bin/*`, `/sbin/*`, `/usr/*` | SIP protected |
 | `~/Library/Keychains/*` | Keychains (passwords, certificates) |
-| `~/Library/Preferences/*` | User preferences |
+| `~/Library/Preferences/*` | User preferences. One exception, off by default: with `MAC_OPS_ORPHAN_APP_DATA_ACTION=trash` the `orphan-app` module moves a top-level `<bundle id>.plist` of an app that is no longer installed (past the grace period) to the mac-ops trash, where it can be restored |
 | `~/Documents/*`, `~/Desktop/*`, `~/Downloads/*` | User documents |
 | `/Library/LaunchDaemons/*`, `/Library/LaunchAgents/*` | System services |
 
