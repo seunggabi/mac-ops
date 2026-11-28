@@ -124,7 +124,7 @@ _mac_ops_dev_xcode() {
 
 # -----------------------------------------------------------------------------
 # npm cache cleanup
-# ~/.npm/_cacache all
+# Items of ~/.npm/_cacache not used within MAC_OPS_DEV_CACHE_MAX_AGE_DAYS
 # -----------------------------------------------------------------------------
 _mac_ops_dev_npm() {
   if ! command -v npm &>/dev/null; then
@@ -159,25 +159,13 @@ _mac_ops_dev_npm() {
 
   mac_ops_log_info "Cleaning npm cache..."
 
-  local _dev_cutoff _dev_sz _dev_item_name _dev_cleaned=0
+  local _dev_cutoff _dev_cleaned=0
   _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
-  for item in "${npm_cache}"/*(N); do
-    [[ ! -e "${item}" ]] && continue
-    # Skip security software paths, open items and anything used inside
-    # within the threshold (the top-level mtime alone says nothing)
-    if ! _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}"; then
-      continue
-    fi
-    if mac_ops_ignore_check_path "${item}"; then
-      mac_ops_log_debug "User ignore (path): ${item}"
-      continue
-    fi
-    _dev_sz=$(mac_ops_get_dir_size "${item}")
-    if mac_ops_trash_move "${item}" "npm cache cleanup" "dev-cleanup"; then
-      _dev_cleaned=$((_dev_cleaned + _dev_sz))
-    fi
-  done
+  # Only items with nothing inside used within the threshold (the top-level
+  # mtime alone says nothing)
+  _mac_ops_dev_trash_items "${npm_cache}" "npm cache cleanup" "${_dev_cutoff}"
+  _dev_cleaned="${REPLY}"
 
   if [[ ${_dev_cleaned} -gt 0 ]]; then
     MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
@@ -190,7 +178,7 @@ _mac_ops_dev_npm() {
 
 # -----------------------------------------------------------------------------
 # yarn cache cleanup
-# ~/.yarn/cache all
+# Items of ~/.yarn/cache not used within MAC_OPS_DEV_CACHE_MAX_AGE_DAYS
 # -----------------------------------------------------------------------------
 _mac_ops_dev_yarn() {
   if ! command -v yarn &>/dev/null; then
@@ -225,25 +213,13 @@ _mac_ops_dev_yarn() {
 
   mac_ops_log_info "Cleaning yarn cache..."
 
-  local _dev_cutoff _dev_sz _dev_item_name _dev_cleaned=0
+  local _dev_cutoff _dev_cleaned=0
   _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
-  for item in "${yarn_cache}"/*(N); do
-    [[ ! -e "${item}" ]] && continue
-    # Skip security software paths, open items and anything used inside
-    # within the threshold (the top-level mtime alone says nothing)
-    if ! _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}"; then
-      continue
-    fi
-    if mac_ops_ignore_check_path "${item}"; then
-      mac_ops_log_debug "User ignore (path): ${item}"
-      continue
-    fi
-    _dev_sz=$(mac_ops_get_dir_size "${item}")
-    if mac_ops_trash_move "${item}" "yarn cache cleanup" "dev-cleanup"; then
-      _dev_cleaned=$((_dev_cleaned + _dev_sz))
-    fi
-  done
+  # Only items with nothing inside used within the threshold (the top-level
+  # mtime alone says nothing)
+  _mac_ops_dev_trash_items "${yarn_cache}" "yarn cache cleanup" "${_dev_cutoff}"
+  _dev_cleaned="${REPLY}"
 
   if [[ ${_dev_cleaned} -gt 0 ]]; then
     MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
@@ -256,7 +232,7 @@ _mac_ops_dev_yarn() {
 
 # -----------------------------------------------------------------------------
 # pnpm cache cleanup
-# ~/.pnpm-store all
+# Items of ~/.pnpm-store not used within MAC_OPS_DEV_CACHE_MAX_AGE_DAYS
 # -----------------------------------------------------------------------------
 _mac_ops_dev_pnpm() {
   if ! command -v pnpm &>/dev/null; then
@@ -291,25 +267,13 @@ _mac_ops_dev_pnpm() {
 
   mac_ops_log_info "Cleaning pnpm store..."
 
-  local _dev_cutoff _dev_sz _dev_item_name _dev_cleaned=0
+  local _dev_cutoff _dev_cleaned=0
   _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
-  for item in "${pnpm_store}"/*(N); do
-    [[ ! -e "${item}" ]] && continue
-    # Skip security software paths, open items and anything used inside
-    # within the threshold (the top-level mtime alone says nothing)
-    if ! _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}"; then
-      continue
-    fi
-    if mac_ops_ignore_check_path "${item}"; then
-      mac_ops_log_debug "User ignore (path): ${item}"
-      continue
-    fi
-    _dev_sz=$(mac_ops_get_dir_size "${item}")
-    if mac_ops_trash_move "${item}" "pnpm store cleanup" "dev-cleanup"; then
-      _dev_cleaned=$((_dev_cleaned + _dev_sz))
-    fi
-  done
+  # Only items with nothing inside used within the threshold (the top-level
+  # mtime alone says nothing)
+  _mac_ops_dev_trash_items "${pnpm_store}" "pnpm store cleanup" "${_dev_cutoff}"
+  _dev_cleaned="${REPLY}"
 
   if [[ ${_dev_cleaned} -gt 0 ]]; then
     MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
@@ -322,7 +286,7 @@ _mac_ops_dev_pnpm() {
 
 # -----------------------------------------------------------------------------
 # pip cache cleanup
-# ~/.cache/pip all
+# Items of ~/.cache/pip not used within MAC_OPS_DEV_CACHE_MAX_AGE_DAYS
 # -----------------------------------------------------------------------------
 _mac_ops_dev_pip() {
   if ! command -v pip &>/dev/null && ! command -v pip3 &>/dev/null; then
@@ -357,25 +321,13 @@ _mac_ops_dev_pip() {
 
   mac_ops_log_info "Cleaning pip cache..."
 
-  local _dev_cutoff _dev_sz _dev_item_name _dev_cleaned=0
+  local _dev_cutoff _dev_cleaned=0
   _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
-  for item in "${pip_cache}"/*(N); do
-    [[ ! -e "${item}" ]] && continue
-    # Skip security software paths, open items and anything used inside
-    # within the threshold (the top-level mtime alone says nothing)
-    if ! _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}"; then
-      continue
-    fi
-    if mac_ops_ignore_check_path "${item}"; then
-      mac_ops_log_debug "User ignore (path): ${item}"
-      continue
-    fi
-    _dev_sz=$(mac_ops_get_dir_size "${item}")
-    if mac_ops_trash_move "${item}" "pip cache cleanup" "dev-cleanup"; then
-      _dev_cleaned=$((_dev_cleaned + _dev_sz))
-    fi
-  done
+  # Only items with nothing inside used within the threshold (the top-level
+  # mtime alone says nothing)
+  _mac_ops_dev_trash_items "${pip_cache}" "pip cache cleanup" "${_dev_cutoff}"
+  _dev_cleaned="${REPLY}"
 
   if [[ ${_dev_cleaned} -gt 0 ]]; then
     MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
@@ -388,7 +340,8 @@ _mac_ops_dev_pip() {
 
 # -----------------------------------------------------------------------------
 # gradle cache cleanup
-# ~/.gradle/caches all
+# Items of ~/.gradle/caches not used within MAC_OPS_DEV_CACHE_MAX_AGE_DAYS,
+# except the modules-* dependency artifacts
 # -----------------------------------------------------------------------------
 _mac_ops_dev_gradle() {
   if ! command -v gradle &>/dev/null; then
@@ -464,7 +417,7 @@ _mac_ops_dev_gradle() {
 
 # -----------------------------------------------------------------------------
 # CocoaPods cache cleanup
-# ~/Library/Caches/CocoaPods all
+# Items of ~/Library/Caches/CocoaPods not used within MAC_OPS_DEV_CACHE_MAX_AGE_DAYS
 # -----------------------------------------------------------------------------
 _mac_ops_dev_cocoapods() {
   if ! command -v pod &>/dev/null; then
