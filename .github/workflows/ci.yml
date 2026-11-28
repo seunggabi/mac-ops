@@ -21,6 +21,7 @@ jobs:
           zsh tests/test-file-cleanup.zsh
           zsh tests/test-orphan-killer.zsh
           zsh tests/test-core-safety.zsh
+          zsh tests/test-timeout.zsh
           zsh tests/test-e2e.zsh
 
   lint:
