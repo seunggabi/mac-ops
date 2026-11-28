@@ -808,6 +808,44 @@ test_size_guard_warns() {
 }
 test_size_guard_warns
 
+# Bookkeeping names in another case (case-insensitive APFS) are never
+# purged; restore protection ignores case
+test_trash_bookkeeping_case() {
+    print "[TEST] test_trash_bookkeeping_case"
+    _t5_reset_trash
+    mkdir -p "${MAC_OPS_TRASH_DIR}/.staging/keep" "${MAC_OPS_TRASH_DIR}/.index-recovery/x"
+    print s > "${MAC_OPS_TRASH_DIR}/.staging/keep/f"
+    print r > "${MAC_OPS_TRASH_DIR}/.index-recovery/x/f"
+    : >> "${MAC_OPS_TRASH_DIR}/.index.flock"
+    local n out
+    for n in .INDEX.JSON .Index.Flock .Staging .index-Recovery/x; do
+        _mac_ops_trash_path_valid "${MAC_OPS_TRASH_DIR}/${n}"
+        assert_eq "$?" "1" "trash path ${n} is a bookkeeping name, not valid"
+    done
+    mac_ops_index_read
+    _t5_add_record "c1_20260101000000" "/x/c1" "${MAC_OPS_TRASH_DIR}/.INDEX.JSON" "${PAST_ISO}"
+    _t5_add_record "c2_20260101000000" "/x/c2" "${MAC_OPS_TRASH_DIR}/.Index.Flock" "${PAST_ISO}"
+    _t5_add_record "c3_20260101000000" "/x/c3" "${MAC_OPS_TRASH_DIR}/.Staging" "${PAST_ISO}"
+    _t5_add_record "c4_20260101000000" "/x/c4" "${MAC_OPS_TRASH_DIR}/.index-Recovery/x" "${PAST_ISO}"
+    mac_ops_index_write
+    mac_ops_trash_expire >/dev/null 2>&1
+    assert_eq "$(plutil -convert xml1 -o /dev/null "${MAC_OPS_INDEX_FILE}" >/dev/null 2>&1 && grep -c '"c1_20260101000000": {' "${MAC_OPS_INDEX_FILE}")" "1" "real index survives a record naming .INDEX.JSON"
+    assert_eq "$(cat "${MAC_OPS_TRASH_DIR}/.staging/keep/f" 2>/dev/null)" "s" "real staging survives a record naming .Staging"
+    assert_eq "$(cat "${MAC_OPS_TRASH_DIR}/.index-recovery/x/f" 2>/dev/null)" "r" "real recovery dir survives a record naming .index-Recovery/x"
+    assert_eq "$([[ -f "${MAC_OPS_TRASH_DIR}/.index.flock" ]] && print kept)" "kept" "real lock file survives a record naming .Index.Flock"
+
+    _mac_ops_trash_restore_target_ok "${HOME}/DOCUMENTS/x"
+    assert_eq "$?" "1" "restore into ~/DOCUMENTS (case variant) is refused"
+    _mac_ops_trash_restore_target_ok "${HOME}/Library/PREFERENCES"
+    assert_eq "$?" "1" "restore onto ~/Library/PREFERENCES itself is refused"
+    _mac_ops_trash_restore_target_ok "${HOME}/Library/Preferences/com.example.x.plist"
+    assert_eq "$?" "0" "restore of a plist inside Preferences is still allowed"
+    _mac_ops_trash_restore_target_ok "${MAC_OPS_HOME:h}/${(U)MAC_OPS_HOME:t}/x"
+    assert_eq "$?" "1" "restore into the mac-ops home in another case is refused"
+    _t5_reset_trash
+}
+test_trash_bookkeeping_case
+
 print ""
 
 # =============================================================================

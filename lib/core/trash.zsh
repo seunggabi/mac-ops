@@ -99,7 +99,9 @@ _mac_ops_trash_path_valid() {
   local trash="${MAC_OPS_TRASH_DIR:a}"
   [[ "${trash}" != "/" && "${p:a}" == "${p}" && "${p}" == "${trash}/"?* ]] || return 1
   local rel="${p#"${trash}/"}"
-  case "${rel%%/*}" in
+  # Lowercased: on case-insensitive APFS ".INDEX.JSON" or ".Staging" name
+  # the real bookkeeping files
+  case "${(L)${rel%%/*}}" in
     .index.json*|.index.lock*|.index.flock|.index-recovery|.staging) return 1 ;;
   esac
   return 0
@@ -175,16 +177,23 @@ _mac_ops_trash_restore_target_ok() {
     REPLY="self-protection rule ${REPLY}"
     return 1
   fi
-  if [[ "${p}" == "${MAC_OPS_TRASH_DIR:a}" || "${p}" == "${MAC_OPS_TRASH_DIR:a}/"* ]]; then
-    REPLY="inside the trash"
-    return 1
-  fi
-  for cand in "${p}" "${p:A}"; do
+  # Compared lowercased: the default APFS volume is case-insensitive, so
+  # ~/DOCUMENTS/x is ~/Documents/x
+  local lp="${(L)p}" own lrule
+  for own in "${MAC_OPS_TRASH_DIR:a}" "${MAC_OPS_HOME:a}"; do
+    [[ -n "${own}" && "${own}" != "/" ]] || continue
+    if [[ "${lp}" == "${(L)own}" || "${lp}" == "${(L)own}/"* ]]; then
+      REPLY="inside the mac-ops home or trash (${own})"
+      return 1
+    fi
+  done
+  for cand in "${lp}" "${(L)${p:A}}"; do
     for rule in "${MAC_OPS_WHITELIST[@]}"; do
       [[ -n "${rule}" ]] || continue
-      if [[ "${rule}" == "${HOME}/Library/Preferences" ]]; then
-        [[ "${cand}" == "${rule}" ]] || continue
-      elif [[ "${cand}" != "${rule}" && "${cand}" != "${rule}/"* ]]; then
+      lrule="${(L)rule}"
+      if [[ "${lrule}" == "${(L)HOME}/library/preferences" ]]; then
+        [[ "${cand}" == "${lrule}" ]] || continue
+      elif [[ "${cand}" != "${lrule}" && "${cand}" != "${lrule}/"* ]]; then
         continue
       fi
       REPLY="protected path rule ${rule}"
