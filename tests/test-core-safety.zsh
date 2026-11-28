@@ -569,6 +569,98 @@ test_trash_shared_path_waits_for_last_record
 test_trash_move_avoids_indexed_path
 test_trash_missing_path_record_dropped
 
+print ""
+
+# =============================================================================
+# Self-protection (item 11): same in-shell environment as the trash section
+# =============================================================================
+assert_refused() {
+    mac_ops_is_path_safe "$1" >/dev/null 2>&1
+    assert_eq "$?" "1" "$2"
+}
+
+test_selfprotect_mac_ops_home() {
+    print "[TEST] selfprotect_mac_ops_home"
+    assert_refused "${MAC_OPS_HOME}" "mac-ops home refused"
+    assert_refused "${MAC_OPS_HOME}/" "mac-ops home with trailing slash refused"
+    assert_refused "${MAC_OPS_TRASH_DIR}/Users/x/file" "child of mac-ops trash refused"
+    assert_refused "${MAC_OPS_HOME}/sub/../.logs/a.log" "dotdot inside mac-ops home refused"
+    assert_refused "${HOME}/../${MAC_OPS_HOME:t}/.trash" "dotdot into mac-ops home refused"
+}
+
+test_selfprotect_companion_dirs() {
+    print "[TEST] selfprotect_companion_dirs"
+    assert_refused "${HOME}/.mac-optimize" ".mac-optimize refused"
+    assert_refused "${HOME}/.mac-optimize/child/file.txt" "child of .mac-optimize refused"
+}
+
+test_selfprotect_tmp_parking_dirs() {
+    print "[TEST] selfprotect_tmp_parking_dirs"
+    local n base
+    for n in Users Library Applications usr opt private; do
+        for base in /tmp /private/tmp; do
+            assert_refused "${base}/${n}" "${base}/${n} refused"
+            assert_refused "${base}/${n}/" "${base}/${n}/ (trailing slash) refused"
+            assert_refused "${base}/${n}/child/x" "child of ${base}/${n} refused"
+        done
+    done
+    assert_refused "/tmp/foo/../Users/x" "dotdot into /tmp/Users refused"
+    assert_refused "/tmp//Users//x" "double slashes in /tmp/Users path refused"
+}
+
+test_selfprotect_symlink() {
+    print "[TEST] selfprotect_symlink"
+    mkdir -p "${MAC_OPS_HOME}"
+    ln -sfn "${MAC_OPS_HOME}" "${TEST_TMPDIR}/link-to-home"
+    assert_refused "${TEST_TMPDIR}/link-to-home/.trash" "symlink into mac-ops home refused"
+}
+
+test_selfprotect_allows_ordinary() {
+    print "[TEST] selfprotect_allows_ordinary"
+    mkdir -p "${HOME}/Library/Caches/com.example.app"
+    mac_ops_is_path_safe "${HOME}/Library/Caches/com.example.app" >/dev/null 2>&1
+    assert_eq "$?" "0" "ordinary cache path allowed"
+    mac_ops_is_path_safe "/tmp/Usersfoo/x" >/dev/null 2>&1
+    assert_eq "$?" "0" "/tmp/Usersfoo (prefix lookalike) allowed"
+    mac_ops_is_path_safe "${MAC_OPS_HOME}-other/x" >/dev/null 2>&1
+    assert_eq "$?" "0" "mac-ops home prefix lookalike allowed"
+}
+
+# mac_ops_trash_move itself refuses protected sources, so a module that does
+# not call mac_ops_is_path_safe cannot move them. Nothing is created outside
+# the fixture: the /tmp parking paths are refused before any existence check,
+# and only never-existing children of them are named (a regression must not
+# move real parked items into the fixture trash).
+test_selfprotect_trash_move_refuses() {
+    print "[TEST] selfprotect_trash_move_refuses"
+    _t5_reset_trash
+    mkdir -p "${MAC_OPS_HOME}/sub" "${HOME}/.mac-optimize/rec"
+    print "keep" > "${MAC_OPS_HOME}/sub/f.txt"
+    print "keep" > "${HOME}/.mac-optimize/rec/f.txt"
+    ln -sfn "${MAC_OPS_HOME}" "${TEST_TMPDIR}/link-to-home"
+    local p out rc nx="mac-ops-test-nonexistent-$$-${RANDOM}"
+    for p in "${MAC_OPS_HOME}/sub" "${MAC_OPS_HOME}/sub/f.txt" "${MAC_OPS_LOG_DIR}" \
+             "${HOME}/.mac-optimize" "${HOME}/.mac-optimize/rec" \
+             "${TEST_TMPDIR}/link-to-home/sub" \
+             /tmp/{Users,Library,Applications,usr,opt,private}/"${nx}" \
+             /private/tmp/{Users,Library,Applications,usr,opt,private}/"${nx}"; do
+        out=$(mac_ops_trash_move "${p}" "test" "test-module" 2>&1); rc=$?
+        assert_eq "${rc}" "1" "trash_move refuses ${p}"
+        assert_output_contains "${out}" "[WARN] Not moved, protected path" "refusal of ${p} logged at WARN"
+    done
+    assert_eq "$(cat "${MAC_OPS_HOME}/sub/f.txt" 2>/dev/null)" "keep" "mac-ops home content untouched"
+    assert_eq "$(cat "${HOME}/.mac-optimize/rec/f.txt" 2>/dev/null)" "keep" ".mac-optimize content untouched"
+    _t5_record_count
+    assert_eq "${REPLY}" "0" "nothing indexed for refused moves"
+}
+
+test_selfprotect_mac_ops_home
+test_selfprotect_companion_dirs
+test_selfprotect_tmp_parking_dirs
+test_selfprotect_symlink
+test_selfprotect_allows_ordinary
+test_selfprotect_trash_move_refuses
+
 # --- Teardown ---
 rm -rf "${TEST_TMPDIR}"
 

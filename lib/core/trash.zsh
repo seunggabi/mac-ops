@@ -1000,6 +1000,9 @@ _mac_ops_path_open_state() {
 #   disables the check).
 # - The rename and its index record happen under the index lock, so the
 #   reconcile step never sees a moved-but-not-yet-indexed entry.
+# - Self-protected paths (MAC_OPS_HOME, MAC_OPS_SELF_PROTECTED_EXTRA) are
+#   refused for every module. The tool's own purge/restore/expire never call
+#   this function.
 # -----------------------------------------------------------------------------
 mac_ops_trash_move() {
   local source_path="${1}"
@@ -1009,6 +1012,17 @@ mac_ops_trash_move() {
   # Validate arguments
   if [[ -z "${source_path}" || -z "${reason}" || -z "${module_name}" ]]; then
     mac_ops_log_error "Usage: mac_ops_trash_move <path> <reason> <module_name>"
+    return 1
+  fi
+
+  # Self-protection: never move the tool's own home or a companion tool's
+  # directory, whichever module asks (fail closed if the check is missing)
+  if (( ! ${+functions[_mac_ops_is_self_protected]} )); then
+    mac_ops_log_error "Not moved, self-protection check unavailable (lib/core/safety.zsh not loaded): ${source_path}"
+    return 1
+  fi
+  if _mac_ops_is_self_protected "${source_path}"; then
+    mac_ops_log_warn "Not moved, protected path: ${source_path} (self-protection rule: ${REPLY}, module: ${module_name})"
     return 1
   fi
 

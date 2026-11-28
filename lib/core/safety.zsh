@@ -62,12 +62,10 @@ MAC_OPS_WHITELIST=(
 # Entries protect the directory itself and everything below it.
 # Companion/cleaner trash dirs: add entries here only with a reason.
 #   ~/.mac-optimize   record directory of the companion mac-optimize tool
-#   ~/.mole/trash     trash of the Mole cleaner (recoverable items)
 #   /tmp/<root dirs>  mac-optimize parks recoverable items at /tmp/Users etc.
 # shellcheck disable=SC2088  # literal "~/" is expanded to ${HOME} at check time
 MAC_OPS_SELF_PROTECTED_EXTRA=(
   "~/.mac-optimize"
-  "~/.mole/trash"
   "/tmp/Users"
   "/tmp/Library"
   "/tmp/Applications"
