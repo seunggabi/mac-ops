@@ -90,19 +90,72 @@ assert_output_not_contains() {
 # --- Project Root ---
 MAC_OPS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# --- Test Environment Setup ---
-TEST_TMPDIR=$(mktemp -d)
+# --- Test environment setup ---
+# Dry-run by default; real (non-dry) runs only touch fixture files in TEST_TMPDIR.
+# Every scan root and every mac-ops directory points into a fresh mktemp -d
+# directory, set BEFORE anything is sourced or run (several paths are
+# expanded at source time). The guard below aborts the whole file when any of
+# them could reach a real path.
+TEST_TMPDIR=$(mktemp -d 2>/dev/null) || TEST_TMPDIR=""
+if [[ -z "${TEST_TMPDIR}" || "${TEST_TMPDIR}" != /?* || ! -d "${TEST_TMPDIR}" ]]; then
+    print "[ABORT] cannot create a fixture directory with mktemp -d"
+    exit 1
+fi
+export HOME="${TEST_TMPDIR}/home"
 export MAC_OPS_HOME="${TEST_TMPDIR}/mac-ops-home"
 export MAC_OPS_TRASH_DIR="${MAC_OPS_HOME}/.trash"
 export MAC_OPS_META_DIR="${MAC_OPS_HOME}/.metadata"
 export MAC_OPS_LOG_DIR="${MAC_OPS_HOME}/.logs"
 export MAC_OPS_LOCK_FILE="${MAC_OPS_HOME}/mac-ops.lock"
 export MAC_OPS_CONFIG_FILE="${MAC_OPS_HOME}/config.plist"
-export MAC_OPS_DRY_RUN=false
+# Scan roots that are not under HOME (tmp-cleanup, analyze)
+export MAC_OPS_TMP_DIR="${TEST_TMPDIR}/scan-tmp"
+export MAC_OPS_VAR_FOLDERS_DIR="${TEST_TMPDIR}/scan-var-folders"
+export MAC_OPS_DRY_RUN=true
 export MAC_OPS_VERBOSE=false
 export MAC_OPS_FORCE=false
 export MAC_OPS_SCHEDULED=false
 export MAC_OPS_TRASH_RETENTION_HOURS=72
+# What HOME does not isolate (the process table, docker, brew): those
+# modules stay disabled and report-only whatever the caller's environment
+# says; data locations are only reported
+export MAC_OPS_MODULE_BREW_CLEANUP_ENABLED=false
+export MAC_OPS_MODULE_DEV_CLEANUP_ENABLED=false
+export MAC_OPS_MODULE_BROWSER_CLEANUP_ENABLED=false
+export MAC_OPS_MODULE_DOCKER_CLEANUP_ENABLED=false
+export MAC_OPS_MODULE_ZOMBIE_KILLER_ENABLED=false
+export MAC_OPS_MODULE_ORPHAN_KILLER_ENABLED=false
+export MAC_OPS_DOCKER_ACTION=report
+export MAC_OPS_ZOMBIE_ACTION=report
+export MAC_OPS_ORPHAN_ACTION=report
+export MAC_OPS_ORPHAN_APP_DATA_ACTION=report
+
+# --- Isolation guard ---
+_iso_user=$(id -un 2>/dev/null)
+_iso_real_home=""
+if [[ "${_iso_user}" =~ '^[A-Za-z0-9._-]+$' ]]; then
+    eval "_iso_real_home=~${_iso_user}"
+fi
+if [[ -z "${_iso_real_home}" || "${_iso_real_home}" != /* ]]; then
+    print "[ABORT] cannot determine the real home directory of '${_iso_user}'"
+    exit 1
+fi
+if [[ "${HOME}" == "${_iso_real_home}" || "${HOME:A}" == "${_iso_real_home:A}" ]]; then
+    print "[ABORT] HOME is the real home directory (${HOME})"
+    exit 1
+fi
+for _iso_var in HOME MAC_OPS_HOME MAC_OPS_TRASH_DIR MAC_OPS_META_DIR MAC_OPS_LOG_DIR \
+    MAC_OPS_LOCK_FILE MAC_OPS_CONFIG_FILE MAC_OPS_TMP_DIR MAC_OPS_VAR_FOLDERS_DIR; do
+    if [[ "${(P)_iso_var}" != "${TEST_TMPDIR}/"?* || "${(P)_iso_var}" == *"/../"* ]]; then
+        print "[ABORT] ${_iso_var} is not inside the fixture directory: ${(P)_iso_var}"
+        exit 1
+    fi
+done
+unset _iso_user _iso_real_home _iso_var
+# Fixture skeleton of an ordinary Mac home (empty)
+mkdir -p "${HOME}/Library/Caches" "${HOME}/Library/Logs/DiagnosticReports" \
+    "${HOME}/Library/Application Support/CrashReporter" \
+    "${MAC_OPS_TMP_DIR}" "${MAC_OPS_VAR_FOLDERS_DIR}"
 
 # Create test directory structure
 mkdir -p "${MAC_OPS_HOME}"
@@ -224,6 +277,9 @@ echo "test content 2" > "${TEST_FILES_DIR}/file2.txt"
 mkdir -p "${TEST_FILES_DIR}/subdir"
 echo "test content 3" > "${TEST_FILES_DIR}/subdir/file3.txt"
 
+# Real (non-dry) trash operations on the fixture files only
+export MAC_OPS_DRY_RUN=false
+
 # Load modules for trash operations
 source "${MAC_OPS_ROOT}/lib/core/config.zsh"
 source "${MAC_OPS_ROOT}/lib/core/logger.zsh"
@@ -285,15 +341,51 @@ assert_output_contains "${list_trash_output}" "trash-test.txt" "list-trash shows
 print ""
 
 # =============================================================================
-# test_purge_command
+# test_purge_command (real purge, fixture trash only)
 # =============================================================================
 print "[TEST] test_purge_command"
+
+# Expire the fixture record; a sentinel outside the trash must survive
+local purge_sentinel="${TEST_FILES_DIR}/purge-sentinel.txt"
+echo "keep" > "${purge_sentinel}"
+local purge_target="${MAC_OPS_TRASH_DIR}${TEST_FILES_DIR}/trash-test.txt"
+mac_ops_index_read
+local purge_key
+for purge_key in "${_MAC_OPS_IDX_KEYS[@]}"; do
+    [[ "${_MAC_OPS_IDX_TRASH[${purge_key}]}" == "${purge_target}" ]] && _MAC_OPS_IDX_EXPIRE[${purge_key}]="2020-01-01T00:00:00Z"
+done
+mac_ops_index_write
 
 local purge_output
 purge_output=$("${MAC_OPS_ROOT}/bin/mac-ops" purge 2>&1)
 local purge_exit=$?
 
 assert_exit_code "${purge_exit}" "0" "purge command exits with 0"
+assert_file_not_exists "${purge_target}" "purge deletes the expired fixture item from the trash"
+assert_file_exists "${purge_sentinel}" "purge leaves files outside the trash alone"
+
+# Back to dry-run for every command below
+export MAC_OPS_DRY_RUN=true
+
+print ""
+
+# =============================================================================
+# test_tmp_module_real_run (non-dry run of one module, fixture scan roots only)
+# =============================================================================
+print "[TEST] test_tmp_module_real_run"
+
+local tmp_old="${MAC_OPS_TMP_DIR}/e2e-old-file.dat"
+local tmp_new="${MAC_OPS_TMP_DIR}/e2e-new-file.dat"
+echo "old" > "${tmp_old}"
+echo "new" > "${tmp_new}"
+touch -t "$(date -v-30d '+%Y%m%d%H%M')" "${tmp_old}"
+local tmp_real_output
+tmp_real_output=$(MAC_OPS_DRY_RUN=false "${MAC_OPS_ROOT}/bin/mac-ops" run --module=tmp 2>&1)
+local tmp_real_exit=$?
+assert_exit_code "${tmp_real_exit}" "0" "non-dry tmp run on the fixture exits with 0"
+assert_file_not_exists "${tmp_old}" "old fixture file moved out of the fixture tmp dir"
+assert_file_exists "${MAC_OPS_TRASH_DIR}${tmp_old}" "old fixture file is in the fixture trash"
+assert_file_exists "${tmp_new}" "recent fixture file is kept"
 
 print ""
 
@@ -402,14 +494,16 @@ print ""
 # =============================================================================
 print "[TEST] test_cli_without_args"
 
+# Without a command the CLI runs "run". A bare "mac-ops" is never executed
+# here; the same code path runs with only --dry-run (no command word)
+assert_output_contains "$(cat "${MAC_OPS_ROOT}/bin/mac-ops")" 'local command="run"' "CLI without a command defaults to run"
 local no_args_output
-no_args_output=$("${MAC_OPS_ROOT}/bin/mac-ops" 2>&1)
+no_args_output=$("${MAC_OPS_ROOT}/bin/mac-ops" --dry-run 2>&1)
 local no_args_exit=$?
 
-# Note: CLI without args runs default "run" command, not help
 # Note: May exit with 1 due to readonly 'status' variable bug in zsh
-assert_eq "$((no_args_exit <= 1))" "1" "CLI without args completes (exit ${no_args_exit})"
-assert_output_contains "${no_args_output}" "parallel execution" "CLI without args runs cleanup"
+assert_eq "$((no_args_exit <= 1))" "1" "CLI without a command (dry-run) completes (exit ${no_args_exit})"
+assert_output_contains "${no_args_output}" "parallel execution" "CLI without a command runs cleanup"
 
 print ""
 

@@ -45,19 +45,72 @@ assert_output_contains() {
 # --- 프로젝트 루트 ---
 MAC_OPS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# --- 테스트 환경 설정 ---
-TEST_TMPDIR=$(mktemp -d)
+# --- Test environment setup ---
+# Modules run in dry-run; the scans with dry-run off use fixture directories.
+# Every scan root and every mac-ops directory points into a fresh mktemp -d
+# directory, set BEFORE anything is sourced or run (several paths are
+# expanded at source time). The guard below aborts the whole file when any of
+# them could reach a real path.
+TEST_TMPDIR=$(mktemp -d 2>/dev/null) || TEST_TMPDIR=""
+if [[ -z "${TEST_TMPDIR}" || "${TEST_TMPDIR}" != /?* || ! -d "${TEST_TMPDIR}" ]]; then
+    print "[ABORT] cannot create a fixture directory with mktemp -d"
+    exit 1
+fi
+export HOME="${TEST_TMPDIR}/home"
 export MAC_OPS_HOME="${TEST_TMPDIR}/mac-ops-home"
 export MAC_OPS_TRASH_DIR="${MAC_OPS_HOME}/.trash"
 export MAC_OPS_META_DIR="${MAC_OPS_HOME}/.metadata"
 export MAC_OPS_LOG_DIR="${MAC_OPS_HOME}/.logs"
 export MAC_OPS_LOCK_FILE="${MAC_OPS_HOME}/mac-ops.lock"
 export MAC_OPS_CONFIG_FILE="${MAC_OPS_HOME}/config.plist"
+# Scan roots that are not under HOME (tmp-cleanup, analyze)
+export MAC_OPS_TMP_DIR="${TEST_TMPDIR}/scan-tmp"
+export MAC_OPS_VAR_FOLDERS_DIR="${TEST_TMPDIR}/scan-var-folders"
 export MAC_OPS_DRY_RUN=true
 export MAC_OPS_VERBOSE=false
 export MAC_OPS_FORCE=false
 export MAC_OPS_SCHEDULED=true
 export MAC_OPS_TRASH_RETENTION_HOURS=72
+# What HOME does not isolate (the process table, docker, brew): those
+# modules stay disabled and report-only whatever the caller's environment
+# says; data locations are only reported
+export MAC_OPS_MODULE_BREW_CLEANUP_ENABLED=false
+export MAC_OPS_MODULE_DEV_CLEANUP_ENABLED=false
+export MAC_OPS_MODULE_BROWSER_CLEANUP_ENABLED=false
+export MAC_OPS_MODULE_DOCKER_CLEANUP_ENABLED=false
+export MAC_OPS_MODULE_ZOMBIE_KILLER_ENABLED=false
+export MAC_OPS_MODULE_ORPHAN_KILLER_ENABLED=false
+export MAC_OPS_DOCKER_ACTION=report
+export MAC_OPS_ZOMBIE_ACTION=report
+export MAC_OPS_ORPHAN_ACTION=report
+export MAC_OPS_ORPHAN_APP_DATA_ACTION=report
+
+# --- Isolation guard ---
+_iso_user=$(id -un 2>/dev/null)
+_iso_real_home=""
+if [[ "${_iso_user}" =~ '^[A-Za-z0-9._-]+$' ]]; then
+    eval "_iso_real_home=~${_iso_user}"
+fi
+if [[ -z "${_iso_real_home}" || "${_iso_real_home}" != /* ]]; then
+    print "[ABORT] cannot determine the real home directory of '${_iso_user}'"
+    exit 1
+fi
+if [[ "${HOME}" == "${_iso_real_home}" || "${HOME:A}" == "${_iso_real_home:A}" ]]; then
+    print "[ABORT] HOME is the real home directory (${HOME})"
+    exit 1
+fi
+for _iso_var in HOME MAC_OPS_HOME MAC_OPS_TRASH_DIR MAC_OPS_META_DIR MAC_OPS_LOG_DIR \
+    MAC_OPS_LOCK_FILE MAC_OPS_CONFIG_FILE MAC_OPS_TMP_DIR MAC_OPS_VAR_FOLDERS_DIR; do
+    if [[ "${(P)_iso_var}" != "${TEST_TMPDIR}/"?* || "${(P)_iso_var}" == *"/../"* ]]; then
+        print "[ABORT] ${_iso_var} is not inside the fixture directory: ${(P)_iso_var}"
+        exit 1
+    fi
+done
+unset _iso_user _iso_real_home _iso_var
+# Fixture skeleton of an ordinary Mac home (empty)
+mkdir -p "${HOME}/Library/Caches" "${HOME}/Library/Logs/DiagnosticReports" \
+    "${HOME}/Library/Application Support/CrashReporter" \
+    "${MAC_OPS_TMP_DIR}" "${MAC_OPS_VAR_FOLDERS_DIR}"
 
 print "=== mac-ops 모듈 통합 테스트 (dry-run) ==="
 print ""
