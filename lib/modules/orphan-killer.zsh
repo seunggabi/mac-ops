@@ -41,14 +41,15 @@ _MAC_OPS_ORPHAN_SECURITY_KEYWORDS=(
 )
 
 # --- User daemons: long-running tools started on purpose, never signalled ---
-# Exact, case-insensitive match on the executable base name (zsh patterns).
+# Exact, case-insensitive match on the executable base name. Name families
+# (qemu-system-*, jupyter*) are matched by prefix in _mac_ops_orphan_is_user_daemon.
 _MAC_OPS_ORPHAN_USER_DAEMONS=(
   gpg-agent dirmngr scdaemon ssh-agent
-  ollama limactl colima 'qemu-system-*' podman dockerd containerd buildkitd
+  ollama limactl colima podman dockerd containerd buildkitd
   pm2 emacs tmux screen mosh-server
   syncthing rclone cloudflared ngrok tailscaled
   postgres postmaster mysqld mariadbd redis-server mongod memcached
-  nginx httpd caddy 'jupyter*' code-server
+  nginx httpd caddy jupyter code-server
 )
 
 # --- Process table snapshot (filled by _mac_ops_orphan_load_snapshot) ---
@@ -364,16 +365,19 @@ _mac_ops_orphan_title() {
 _mac_ops_orphan_is_user_daemon() {
   local exe="${1}" title="${2:-}"
   typeset -l base="${exe##*/}"
-  local pattern=""
+  local name=""
 
   if [[ "${exe}" == [Pp][Mm]2* || "${title}" == [Pp][Mm]2* ]]; then
     _MAC_OPS_ORPHAN_REASON="user daemon: pm2 God daemon (process title starts with PM2)"
     return 0
   fi
 
-  for pattern in "${_MAC_OPS_ORPHAN_USER_DAEMONS[@]}"; do
-    # ${~pattern}: let qemu-system-* / jupyter* act as patterns
-    if [[ "${base}" == ${~pattern} ]]; then
+  if [[ "${base}" == qemu-system-* || "${base}" == jupyter* ]]; then
+    _MAC_OPS_ORPHAN_REASON="user daemon started on purpose (${base})"
+    return 0
+  fi
+  for name in "${_MAC_OPS_ORPHAN_USER_DAEMONS[@]}"; do
+    if [[ "${base}" == "${name}" ]]; then
       _MAC_OPS_ORPHAN_REASON="user daemon started on purpose (${base})"
       return 0
     fi
@@ -571,7 +575,8 @@ _mac_ops_orphan_classify() {
   fi
 
   # Something still depends on a process that has children
-  local first_kid="${${_MAC_OPS_ORPHAN_KIDS[${pid}]}%%$'\n'*}"
+  local first_kid="${_MAC_OPS_ORPHAN_KIDS[${pid}]}"
+  first_kid="${first_kid%%$'\n'*}"
   if [[ -n "${first_kid}" ]]; then
     _MAC_OPS_ORPHAN_REASON="has child process PID ${first_kid}"
     return 1
