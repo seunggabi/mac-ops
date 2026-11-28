@@ -443,6 +443,64 @@ ${BREW_PREFIX}/Cellar/node/22.0.0/bin/node")
 assert_output_contains "${calls}" "brew cleanup --prune=7" "brew cleanup runs when only linked kegs are in use"
 
 # =============================================================================
+# launchd agent install: a failed launchctl load is an error
+# The install functions are taken from bin/mac-ops (its main is never run)
+# and launchctl is a shell function; plists are written under the fixture HOME.
+# =============================================================================
+AGENT_FUNCS="${TEST_TMPDIR}/agent-funcs.zsh"
+sed -n -e '/^_mac_ops_agent_bin_path()/,/^}/p' -e '/^_mac_ops_install_agent()/,/^}/p' \
+    -e '/^_mac_ops_cmd_install()/,/^}/p' -e '/^_mac_ops_cmd_monitor()/,/^}/p' \
+    "${MAC_OPS_ROOT}/bin/mac-ops" > "${AGENT_FUNCS}"
+LAUNCH_AGENTS="${HOME}/Library/LaunchAgents"
+
+# Usage: run_agent <launchctl load exit status> <install|monitor-setup>
+run_agent() {
+    : > "${CALLS}"
+    (
+        launchctl() {
+            print -r -- "launchctl $*" >> "${CALLS}"
+            if [[ "${1}" == load && "${LAUNCHCTL_LOAD_RC}" != 0 ]]; then
+                print -r -- "Load failed: 5: Input/output error" >&2
+                return "${LAUNCHCTL_LOAD_RC}"
+            fi
+            return 0
+        }
+        require_stubs launchctl
+        LAUNCHCTL_LOAD_RC="${1}"
+        # monitor setup reloads the settings; the CLI layer keeps dry-run off
+        MAC_OPS_DRY_RUN=false
+        MAC_OPS_CLI_OVERRIDES[MAC_OPS_DRY_RUN]=false
+        source "${AGENT_FUNCS}"
+        require_stubs launchctl _mac_ops_install_agent _mac_ops_cmd_install _mac_ops_cmd_monitor
+        if [[ "${2}" == install ]]; then
+            _mac_ops_cmd_install
+        else
+            _mac_ops_cmd_monitor setup
+        fi
+        print -- "rc=$?"
+    ) 2>&1
+}
+
+print "[TEST] install_launchctl_load_failure"
+agent_output=$(run_agent 5 install)
+assert_output_contains "${agent_output}" "rc=1" "install returns non-zero when launchctl load fails"
+assert_output_contains "${agent_output}" "[ERROR] launchctl load failed (exit 5) for ${LAUNCH_AGENTS}/com.mac-ops.cleanup.plist: Load failed: 5: Input/output error" "install logs the launchctl error"
+assert_no_match "${agent_output}" "launchd agent installed|Full Disk Access" "install does not report success after a failed load"
+assert_output_contains "$(cat "${CALLS}")" "launchctl load ${LAUNCH_AGENTS}/com.mac-ops.cleanup.plist" "install loads the fixture plist through the stub"
+agent_output=$(run_agent 0 install)
+assert_output_contains "${agent_output}" "rc=0" "control: install returns 0 when launchctl load succeeds"
+assert_output_contains "${agent_output}" "launchd agent installed: ${LAUNCH_AGENTS}/com.mac-ops.cleanup.plist" "control: install reports success"
+
+print "[TEST] monitor_setup_launchctl_load_failure"
+agent_output=$(run_agent 5 monitor-setup)
+assert_output_contains "${agent_output}" "rc=1" "monitor setup returns non-zero when launchctl load fails"
+assert_output_contains "${agent_output}" "[ERROR] launchctl load failed (exit 5) for ${LAUNCH_AGENTS}/com.mac-ops.monitor.plist" "monitor setup logs the launchctl error"
+assert_no_match "${agent_output}" "Monitor launchd agent installed" "monitor setup does not report success after a failed load"
+agent_output=$(run_agent 0 monitor-setup)
+assert_output_contains "${agent_output}" "rc=0" "control: monitor setup returns 0 when launchctl load succeeds"
+assert_output_contains "${agent_output}" "Monitor launchd agent installed (every 5 min): ${LAUNCH_AGENTS}/com.mac-ops.monitor.plist" "control: monitor setup reports success"
+
+# =============================================================================
 # Cleanup
 # =============================================================================
 mkdir -p "/tmp${TEST_TMPDIR:h}"
