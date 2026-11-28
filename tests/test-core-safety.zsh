@@ -1369,6 +1369,16 @@ test_index_control_char_names() {
         _mac_ops_json_extract_string "\"k\": \"${REPLY}\","
         assert_eq "${REPLY}" "${v}" "json escape/extract round-trip: ${(q)v}"
     done
+    # Non-ASCII (UTF-8) names are never rewritten, whatever the locale
+    # (launchd runs without LANG)
+    local loc_out loc
+    for loc in C en_US.UTF-8; do
+        loc_out=$(LC_ALL="${loc}" zsh -f -c 'source "$1/lib/core/trash.zsh" 2>/dev/null
+            _mac_ops_json_escape_line "$2"; e="${REPLY}"
+            _mac_ops_json_extract_string "\"k\": \"${e}\","
+            [[ "${REPLY}" == "$2" && "${e}" == "${2//$'"'"'\x01'"'"'/\\u0001}" ]] && print ok' _ "${MAC_OPS_ROOT}" $'한글 파일\x01.txt')
+        assert_eq "${loc_out}" "ok" "json round-trip of a UTF-8 name, LC_ALL=${loc}"
+    done
     rm -rf -- "${base}"
 }
 
