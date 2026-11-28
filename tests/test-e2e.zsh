@@ -191,7 +191,9 @@ version_output=$("${MAC_OPS_ROOT}/bin/mac-ops" version 2>&1)
 local version_exit=$?
 
 assert_exit_code "${version_exit}" "0" "version command exits with 0"
-assert_output_contains "${version_output}" "v1.0.0" "version output contains 'v1.0.0'"
+# The version comes from the git tag or the VERSION file (a CI checkout has
+# no tags, so it may be "unknown"): only the format is checked
+assert_eq "$([[ "${version_output}" =~ '^mac-ops v[0-9A-Za-z.+-]+$' ]] && print ok)" "ok" "version output is 'mac-ops v<version>' (got: ${version_output})"
 
 print ""
 
