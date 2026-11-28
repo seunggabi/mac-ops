@@ -12,8 +12,11 @@ Thank you for your interest in contributing to mac-ops! This guide will help you
 
 2. **Run tests** to ensure everything works
    ```bash
-   for t in tests/test-*.zsh; do HOME=$(mktemp -d) zsh "$t" || break; done
+   for t in safety module-safety file-cleanup orphan-killer timeout core-safety; do
+     HOME=$(mktemp -d) zsh "tests/test-${t}.zsh" || break
+   done
    ```
+   `test-trash.zsh`, `test-modules.zsh` and `test-e2e.zsh` run in CI.
 
 3. **Try a dry run** to see the tool in action
    ```bash
@@ -194,10 +197,13 @@ mac-ops uses a custom lightweight test framework with these assertion functions:
 
 ### Running Tests
 
-Run all tests (each with a throwaway HOME):
+Run the unit test files (each with a throwaway HOME):
 ```bash
-for t in tests/test-*.zsh; do HOME=$(mktemp -d) zsh "$t" || break; done
+for t in safety module-safety file-cleanup orphan-killer timeout core-safety; do
+  HOME=$(mktemp -d) zsh "tests/test-${t}.zsh" || break
+done
 ```
+`test-trash.zsh`, `test-modules.zsh` and `test-e2e.zsh` run in CI (see `.github/workflows/ci.yml`).
 
 Run a specific test file:
 ```bash

@@ -410,7 +410,7 @@ Or via crontab:
 > **WARNING**: The following commands are irreversible. Data cannot be recovered once executed.
 
 ```bash
-# 1. Force cleanup - bypasses size guard (2GB limit), skips all safety prompts
+# 1. Force cleanup - bypasses the size guard (2GB limit)
 mac-ops run --force
 
 # 2. Permanently delete all trash - bypasses 72-hour grace period
@@ -419,7 +419,7 @@ sudo rm -rf ~/.mac-ops/.trash
 
 | Command | Risk | What It Does |
 |---------|------|--------------|
-| `run --force` | **HIGH** | Skips size guard, forces cleanup of all targets including large files (>2GB) |
+| `run --force` | **HIGH** | Skips the size guard, so files over 2GB are cleaned too |
 | `sudo rm -rf ~/.mac-ops/.trash` | **CRITICAL** | Permanently deletes all recoverable files, bypassing the 72-hour safety net |
 
 **Before running these commands:**
