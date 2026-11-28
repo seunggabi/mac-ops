@@ -8,6 +8,28 @@
 MAC_OPS_CACHE_MAX_AGE_DAYS=${MAC_OPS_CACHE_MAX_AGE_DAYS:-30}
 MAC_OPS_CACHE_RECENT_DAYS=${MAC_OPS_CACHE_RECENT_DAYS:-7}  # Protect caches used within N days
 
+# --- "Caches" that are not caches: never moved ---
+# ms-playwright: browser binaries used by running tools
+# JetBrains: IDE indexes and caches (hours to rebuild)
+MAC_OPS_CACHE_PROTECTED_NAMES=("ms-playwright" "JetBrains")
+
+# -----------------------------------------------------------------------------
+# Internal: Print the package manager that owns a cache directory name
+# Usage: _mac_ops_cache_manager_of <directory name>
+# -----------------------------------------------------------------------------
+_mac_ops_cache_manager_of() {
+  case "${1}" in
+    pip|pip-tools)        print -- "pip" ;;
+    uv)                   print -- "uv" ;;
+    Homebrew)             print -- "brew" ;;
+    Yarn|yarn)            print -- "yarn" ;;
+    pnpm)                 print -- "pnpm" ;;
+    npm|node-gyp|_npx)    print -- "npm" ;;
+    CocoaPods)            print -- "pod" ;;
+  esac
+  return 0
+}
+
 # -----------------------------------------------------------------------------
 # Cache cleanup main function
 # Performance optimized by processing bundle directories as units
@@ -22,6 +44,7 @@ mac_ops_cache_cleanup() {
   local recent_threshold_seconds=$((recent_days * 86400))
   local bundle_name="" newest_mtime="" age_seconds=0 dir_size=0 file_count=0
   local old_count=0 file_basename="" mtime="" file_size=0
+  local protected_name="" manager="" find_out="" find_rc=0 cutoff=""
 
   mac_ops_log_info "Cache cleanup started: ${cache_dir} (delete: >${max_age_days}d, protect recent: <${recent_days}d)"
 
@@ -66,6 +89,21 @@ mac_ops_cache_cleanup() {
       continue
     fi
 
+    # Skip directories that only look like caches
+    for protected_name in "${MAC_OPS_CACHE_PROTECTED_NAMES[@]}"; do
+      if [[ "${bundle_name}" == "${protected_name}" ]]; then
+        mac_ops_log_debug "Protected, skipped (cache-cleanup): ${bundle_dir} (reason: not a disposable cache)"
+        continue 2
+      fi
+    done
+
+    # Skip a package manager's cache while that manager is running
+    manager=$(_mac_ops_cache_manager_of "${bundle_name}")
+    if [[ -n "${manager}" ]] && _mac_ops_fc_manager_running "${manager}"; then
+      mac_ops_log_debug "Protected, skipped (cache-cleanup): ${bundle_dir} (reason: ${manager} is running)"
+      continue
+    fi
+
     # Skip if app is currently installed
     if echo "${installed_bundles}" | grep -qx "${bundle_name}"; then
       mac_ops_log_debug "Installed app cache protected: ${bundle_name}"
@@ -78,13 +116,30 @@ mac_ops_cache_cleanup() {
       continue
     fi
 
+    # Security software, or still open in a running process
+    if ! _mac_ops_fc_guard "${bundle_dir}" "cache-cleanup"; then
+      continue
+    fi
+
     # Check latest modification time and file count for entire bundle directory (with find at once)
+    # A failed scan must not read as "nothing recent", so its exit status is checked
     local find_result
-    find_result=$(find "${bundle_dir}" -type f -exec stat -f%m {} + 2>/dev/null | awk 'BEGIN{max=0;n=0}{n++;if($1>max)max=$1}END{print max,n}')
+    find_out=$(find "${bundle_dir}" -type f -exec stat -f%m {} + 2>/dev/null)
+    find_rc=$?
+    if [[ ${find_rc} -ne 0 ]]; then
+      mac_ops_log_debug "Protected, skipped (cache-cleanup): ${bundle_dir} (reason: recent-use check failed)"
+      continue
+    fi
+    if [[ -z "${find_out}" ]]; then
+      # No files inside: fall back to the directory's own modification time
+      find_out=$(stat -f%m "${bundle_dir}" 2>/dev/null)
+    fi
+    find_result=$(print -r -- "${find_out}" | awk 'BEGIN{max=0;n=0}/^[0-9]+$/{n++;if($1>max)max=$1}END{print max,n}')
     newest_mtime="${find_result%% *}"
     file_count="${find_result##* }"
 
-    if [[ -z "${newest_mtime}" ]]; then
+    if [[ -z "${newest_mtime}" || "${newest_mtime}" == "0" ]]; then
+      mac_ops_log_debug "Protected, skipped (cache-cleanup): ${bundle_dir} (reason: modification time unavailable)"
       continue
     fi
 
@@ -116,7 +171,12 @@ mac_ops_cache_cleanup() {
         MAC_OPS_CLEANED_BYTES=$((${MAC_OPS_CLEANED_BYTES:-0} + dir_size))
       fi
     else
-      old_count=$(find "${bundle_dir}" -type f ! -newermt "${max_age_days} days ago" 2>/dev/null | wc -l | tr -d ' ')
+      # Absolute timestamp: bfs rejects a relative date such as "30 days ago"
+      cutoff=$(_mac_ops_fc_cutoff_time "${max_age_days}")
+      old_count=0
+      if [[ -n "${cutoff}" ]]; then
+        old_count=$(find "${bundle_dir}" -type f ! -newermt "${cutoff}" 2>/dev/null | wc -l | tr -d ' ')
+      fi
 
       if [[ ${old_count} -gt 0 ]]; then
         mac_ops_log_debug "Some cache files old: ${bundle_name} (${old_count} files exceed ${max_age_days} days, deferred due to newer files existing)"
@@ -138,7 +198,7 @@ mac_ops_cache_cleanup() {
     age_seconds=$((now_epoch - mtime))
 
     if [[ ${age_seconds} -ge ${threshold_seconds} ]]; then
-      if mac_ops_is_path_safe "${cache_file}" && mac_ops_check_size_guard "${cache_file}" && ! mac_ops_ignore_check_path "${cache_file}"; then
+      if _mac_ops_fc_guard "${cache_file}" "cache-cleanup" && mac_ops_is_path_safe "${cache_file}" && mac_ops_check_size_guard "${cache_file}" && ! mac_ops_ignore_check_path "${cache_file}"; then
         file_size=$(mac_ops_get_dir_size "${cache_file}")
         if mac_ops_trash_move "${cache_file}" "cache-expired" "cache-cleanup"; then
           MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))

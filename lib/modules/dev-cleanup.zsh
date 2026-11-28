@@ -28,6 +28,12 @@ _mac_ops_dev_xcode() {
     return 0
   fi
 
+  # DerivedData and simulator caches are in use while Xcode builds
+  if _mac_ops_fc_exec_running "/Xcode.app/Contents/MacOS/Xcode" || _mac_ops_fc_tool_running xcodebuild; then
+    mac_ops_log_debug "Protected, skipped (dev-cleanup): Xcode caches (reason: Xcode is running)"
+    return 0
+  fi
+
   mac_ops_log_info "Cleaning Xcode cache..."
 
   # Clean all DerivedData
@@ -36,15 +42,16 @@ _mac_ops_dev_xcode() {
     derived_size=$(mac_ops_get_dir_size "${xcode_derived}")
 
     if [[ ${derived_size} -gt 0 ]]; then
-      if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-        mac_ops_log_info "[DRY_RUN] Will clean: ${xcode_derived} ($(mac_ops_format_bytes ${derived_size}))"
-      else
-        # Move all items in DerivedData to trash
-        for item in "${xcode_derived}"/*; do
-          [[ ! -e "${item}" ]] && continue
-          mac_ops_trash_move "${item}" "Xcode DerivedData cleanup" "dev-cleanup"
-        done
+      # Move all items in DerivedData to trash. Dry-run takes the same path,
+      # so it lists exactly the items a real run would move (trash_move only
+      # reports in dry-run).
+      for item in "${xcode_derived}"/*(N); do
+        [[ ! -e "${item}" ]] && continue
+        _mac_ops_fc_guard "${item}" "dev-cleanup" || continue
+        mac_ops_trash_move "${item}" "Xcode DerivedData cleanup" "dev-cleanup"
+      done
 
+      if [[ "${MAC_OPS_DRY_RUN}" != "true" ]]; then
         MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + derived_size))
         MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
         mac_ops_log_info "Xcode DerivedData cleanup completed: $(mac_ops_format_bytes ${derived_size})"
@@ -64,10 +71,16 @@ _mac_ops_dev_xcode() {
     now_epoch=$(date +%s)
     ninety_days_ago=$((now_epoch - 7776000))  # 90 days = 7776000 seconds
 
-    for archive in "${xcode_archives}"/*; do
+    for archive in "${xcode_archives}"/*(N); do
       [[ ! -d "${archive}" ]] && continue
 
-      archive_time=$(stat -f%m "${archive}" 2>/dev/null || echo 0)
+      # A failed stat must not read as "older than 90 days"
+      archive_time=$(stat -f%m "${archive}" 2>/dev/null)
+      if [[ ! "${archive_time}" =~ ^[0-9]+$ ]]; then
+        mac_ops_log_debug "Protected, skipped (dev-cleanup): ${archive} (reason: modification time unavailable)"
+        continue
+      fi
+      _mac_ops_fc_guard "${archive}" "dev-cleanup" || continue
 
       if [[ ${archive_time} -lt ${ninety_days_ago} ]]; then
         item_size=$(mac_ops_get_dir_size "${archive}")
@@ -95,14 +108,14 @@ _mac_ops_dev_xcode() {
     sim_size=$(mac_ops_get_dir_size "${xcode_simulator}")
 
     if [[ ${sim_size} -gt 0 ]]; then
-      if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-        mac_ops_log_info "[DRY_RUN] Will clean: ${xcode_simulator} ($(mac_ops_format_bytes ${sim_size}))"
-      else
-        for item in "${xcode_simulator}"/*; do
-          [[ ! -e "${item}" ]] && continue
-          mac_ops_trash_move "${item}" "Xcode Simulator cache cleanup" "dev-cleanup"
-        done
+      # Dry-run takes the same path as a real run (see DerivedData above)
+      for item in "${xcode_simulator}"/*(N); do
+        [[ ! -e "${item}" ]] && continue
+        _mac_ops_fc_guard "${item}" "dev-cleanup" || continue
+        mac_ops_trash_move "${item}" "Xcode Simulator cache cleanup" "dev-cleanup"
+      done
 
+      if [[ "${MAC_OPS_DRY_RUN}" != "true" ]]; then
         MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + sim_size))
         MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
         mac_ops_log_info "Xcode Simulator cache cleanup completed: $(mac_ops_format_bytes ${sim_size})"
@@ -130,6 +143,12 @@ _mac_ops_dev_npm() {
     return 0
   fi
 
+  # The cache is in use while its package manager runs
+  if _mac_ops_fc_manager_running "npm"; then
+    mac_ops_log_debug "Protected, skipped (dev-cleanup): ${npm_cache} (reason: npm is running)"
+    return 0
+  fi
+
   local cache_size
   cache_size=$(mac_ops_get_dir_size "${npm_cache}")
 
@@ -144,16 +163,14 @@ _mac_ops_dev_npm() {
 
   mac_ops_log_info "Cleaning npm cache..."
 
-  local _dev_now _dev_max_age_s _dev_cleaned=0
-  _dev_now=$(date +%s)
-  _dev_max_age_s=$((MAC_OPS_DEV_CACHE_MAX_AGE_DAYS * 86400))
+  local _dev_cutoff _dev_sz _dev_item_name _dev_cleaned=0
+  _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
-  for item in "${npm_cache}"/*; do
+  for item in "${npm_cache}"/*(N); do
     [[ ! -e "${item}" ]] && continue
-    local _dev_mtime _dev_sz
-    _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
-    if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
-      mac_ops_log_debug "Skipping recent npm cache: $(basename ${item})"
+    # Skip security software paths, open items and anything used inside
+    # within the threshold (the top-level mtime alone says nothing)
+    if ! _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}"; then
       continue
     fi
     if mac_ops_ignore_check_path "${item}"; then
@@ -192,6 +209,12 @@ _mac_ops_dev_yarn() {
     return 0
   fi
 
+  # The cache is in use while its package manager runs
+  if _mac_ops_fc_manager_running "yarn"; then
+    mac_ops_log_debug "Protected, skipped (dev-cleanup): ${yarn_cache} (reason: yarn is running)"
+    return 0
+  fi
+
   local cache_size
   cache_size=$(mac_ops_get_dir_size "${yarn_cache}")
 
@@ -206,16 +229,14 @@ _mac_ops_dev_yarn() {
 
   mac_ops_log_info "Cleaning yarn cache..."
 
-  local _dev_now _dev_max_age_s _dev_cleaned=0
-  _dev_now=$(date +%s)
-  _dev_max_age_s=$((MAC_OPS_DEV_CACHE_MAX_AGE_DAYS * 86400))
+  local _dev_cutoff _dev_sz _dev_item_name _dev_cleaned=0
+  _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
-  for item in "${yarn_cache}"/*; do
+  for item in "${yarn_cache}"/*(N); do
     [[ ! -e "${item}" ]] && continue
-    local _dev_mtime _dev_sz
-    _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
-    if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
-      mac_ops_log_debug "Skipping recent yarn cache: $(basename ${item})"
+    # Skip security software paths, open items and anything used inside
+    # within the threshold (the top-level mtime alone says nothing)
+    if ! _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}"; then
       continue
     fi
     if mac_ops_ignore_check_path "${item}"; then
@@ -254,6 +275,12 @@ _mac_ops_dev_pnpm() {
     return 0
   fi
 
+  # The cache is in use while its package manager runs
+  if _mac_ops_fc_manager_running "pnpm"; then
+    mac_ops_log_debug "Protected, skipped (dev-cleanup): ${pnpm_store} (reason: pnpm is running)"
+    return 0
+  fi
+
   local store_size
   store_size=$(mac_ops_get_dir_size "${pnpm_store}")
 
@@ -268,16 +295,14 @@ _mac_ops_dev_pnpm() {
 
   mac_ops_log_info "Cleaning pnpm store..."
 
-  local _dev_now _dev_max_age_s _dev_cleaned=0
-  _dev_now=$(date +%s)
-  _dev_max_age_s=$((MAC_OPS_DEV_CACHE_MAX_AGE_DAYS * 86400))
+  local _dev_cutoff _dev_sz _dev_item_name _dev_cleaned=0
+  _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
-  for item in "${pnpm_store}"/*; do
+  for item in "${pnpm_store}"/*(N); do
     [[ ! -e "${item}" ]] && continue
-    local _dev_mtime _dev_sz
-    _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
-    if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
-      mac_ops_log_debug "Skipping recent pnpm store: $(basename ${item})"
+    # Skip security software paths, open items and anything used inside
+    # within the threshold (the top-level mtime alone says nothing)
+    if ! _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}"; then
       continue
     fi
     if mac_ops_ignore_check_path "${item}"; then
@@ -316,6 +341,12 @@ _mac_ops_dev_pip() {
     return 0
   fi
 
+  # The cache is in use while its package manager runs
+  if _mac_ops_fc_manager_running "pip"; then
+    mac_ops_log_debug "Protected, skipped (dev-cleanup): ${pip_cache} (reason: pip is running)"
+    return 0
+  fi
+
   local cache_size
   cache_size=$(mac_ops_get_dir_size "${pip_cache}")
 
@@ -330,16 +361,14 @@ _mac_ops_dev_pip() {
 
   mac_ops_log_info "Cleaning pip cache..."
 
-  local _dev_now _dev_max_age_s _dev_cleaned=0
-  _dev_now=$(date +%s)
-  _dev_max_age_s=$((MAC_OPS_DEV_CACHE_MAX_AGE_DAYS * 86400))
+  local _dev_cutoff _dev_sz _dev_item_name _dev_cleaned=0
+  _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
-  for item in "${pip_cache}"/*; do
+  for item in "${pip_cache}"/*(N); do
     [[ ! -e "${item}" ]] && continue
-    local _dev_mtime _dev_sz
-    _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
-    if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
-      mac_ops_log_debug "Skipping recent pip cache: $(basename ${item})"
+    # Skip security software paths, open items and anything used inside
+    # within the threshold (the top-level mtime alone says nothing)
+    if ! _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}"; then
       continue
     fi
     if mac_ops_ignore_check_path "${item}"; then
@@ -378,6 +407,12 @@ _mac_ops_dev_gradle() {
     return 0
   fi
 
+  # The cache is in use while its package manager runs
+  if _mac_ops_fc_manager_running "gradle"; then
+    mac_ops_log_debug "Protected, skipped (dev-cleanup): ${gradle_cache} (reason: gradle is running)"
+    return 0
+  fi
+
   local cache_size
   cache_size=$(mac_ops_get_dir_size "${gradle_cache}")
 
@@ -392,13 +427,11 @@ _mac_ops_dev_gradle() {
 
   mac_ops_log_info "Cleaning gradle cache..."
 
-  local _dev_now _dev_max_age_s _dev_cleaned=0
-  _dev_now=$(date +%s)
-  _dev_max_age_s=$((MAC_OPS_DEV_CACHE_MAX_AGE_DAYS * 86400))
+  local _dev_cutoff _dev_sz _dev_item_name _dev_cleaned=0
+  _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
-  for item in "${gradle_cache}"/*; do
+  for item in "${gradle_cache}"/*(N); do
     [[ ! -e "${item}" ]] && continue
-    local _dev_item_name
     _dev_item_name=$(basename "${item}")
 
     # Protect downloaded dependency artifacts (modules-*) from cleanup.
@@ -409,10 +442,9 @@ _mac_ops_dev_gradle() {
       continue
     fi
 
-    local _dev_mtime _dev_sz
-    _dev_mtime=$(stat -f%m "${item}" 2>/dev/null || echo 0)
-    if [[ $((_dev_now - _dev_mtime)) -lt ${_dev_max_age_s} ]]; then
-      mac_ops_log_debug "Skipping recent gradle cache: ${_dev_item_name}"
+    # Skip security software paths, open items and anything used inside
+    # within the threshold (the top-level mtime alone says nothing)
+    if ! _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}"; then
       continue
     fi
     if mac_ops_ignore_check_path "${item}"; then
@@ -451,6 +483,12 @@ _mac_ops_dev_cocoapods() {
     return 0
   fi
 
+  # The cache is in use while CocoaPods runs
+  if _mac_ops_fc_manager_running "pod"; then
+    mac_ops_log_debug "Protected, skipped (dev-cleanup): ${pod_cache} (reason: pod is running)"
+    return 0
+  fi
+
   local cache_size
   cache_size=$(mac_ops_get_dir_size "${pod_cache}")
 
@@ -458,17 +496,18 @@ _mac_ops_dev_cocoapods() {
     return 0
   fi
 
-  if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-    mac_ops_log_info "[DRY_RUN] Will clean CocoaPods cache: ${pod_cache} ($(mac_ops_format_bytes ${cache_size}))"
-    return 0
-  fi
-
   mac_ops_log_info "Cleaning CocoaPods cache..."
 
-  for item in "${pod_cache}"/*; do
+  # Dry-run takes the same path, so it lists exactly what a real run would move
+  for item in "${pod_cache}"/*(N); do
     [[ ! -e "${item}" ]] && continue
+    _mac_ops_fc_guard "${item}" "dev-cleanup" || continue
     mac_ops_trash_move "${item}" "CocoaPods cache cleanup" "dev-cleanup"
   done
+
+  if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
+    return 0
+  fi
 
   MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
   MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))

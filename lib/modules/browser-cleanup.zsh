@@ -16,6 +16,12 @@ _mac_ops_browser_safari() {
     return 0
   fi
 
+  # A running browser is still using its cache
+  if _mac_ops_fc_exec_running "/Safari.app/Contents/MacOS/Safari"; then
+    mac_ops_log_debug "Protected, skipped (browser-cleanup): ${safari_cache_dir} (reason: Safari is running)"
+    return 0
+  fi
+
   mac_ops_log_info "Starting Safari cache cleanup: ${safari_cache_dir}"
 
   # Safety check
@@ -29,6 +35,11 @@ _mac_ops_browser_safari() {
     [[ -e "${cache_item}" ]] || continue
 
     item_basename=$(basename "${cache_item}")
+
+    # Security software, or still open in a running process (helper agents)
+    if ! _mac_ops_fc_guard "${cache_item}" "browser-cleanup"; then
+      continue
+    fi
 
     # Size guard check
     if ! mac_ops_check_size_guard "${cache_item}"; then
@@ -68,6 +79,12 @@ _mac_ops_browser_chrome() {
     return 0
   fi
 
+  # A running browser is still using its cache
+  if _mac_ops_fc_exec_running "/Google Chrome.app/"; then
+    mac_ops_log_debug "Protected, skipped (browser-cleanup): ${chrome_cache_base} (reason: Chrome is running)"
+    return 0
+  fi
+
   mac_ops_log_info "Starting Chrome cache cleanup: ${chrome_cache_base}"
 
   # Process Cache and Code Cache directories
@@ -88,6 +105,11 @@ _mac_ops_browser_chrome() {
       [[ -e "${cache_item}" ]] || continue
 
       item_basename=$(basename "${cache_item}")
+
+      # Security software, or still open in a running process (helper agents)
+      if ! _mac_ops_fc_guard "${cache_item}" "browser-cleanup"; then
+        continue
+      fi
 
       # Size guard check
       if ! mac_ops_check_size_guard "${cache_item}"; then
@@ -128,6 +150,12 @@ _mac_ops_browser_firefox() {
     return 0
   fi
 
+  # A running browser is still using its cache
+  if _mac_ops_fc_exec_running "/Firefox.app/"; then
+    mac_ops_log_debug "Protected, skipped (browser-cleanup): ${firefox_cache_base} (reason: Firefox is running)"
+    return 0
+  fi
+
   mac_ops_log_info "Starting Firefox cache cleanup: ${firefox_cache_base}"
 
   # Iterate through profile directories (*.default*)
@@ -150,6 +178,11 @@ _mac_ops_browser_firefox() {
       [[ -e "${cache_item}" ]] || continue
 
       item_basename=$(basename "${cache_item}")
+
+      # Security software, or still open in a running process (helper agents)
+      if ! _mac_ops_fc_guard "${cache_item}" "browser-cleanup"; then
+        continue
+      fi
 
       # Size guard check
       if ! mac_ops_check_size_guard "${cache_item}"; then

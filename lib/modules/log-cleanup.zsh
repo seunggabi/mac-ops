@@ -6,31 +6,42 @@
 
 # --- Default settings ---
 MAC_OPS_LOG_CLEANUP_MAX_AGE_DAYS=${MAC_OPS_LOG_CLEANUP_MAX_AGE_DAYS:-7}
-MAC_OPS_DIAG_REPORT_MAX_AGE_DAYS=${MAC_OPS_DIAG_REPORT_MAX_AGE_DAYS:-14}
+MAC_OPS_DIAG_REPORT_MAX_AGE_DAYS=${MAC_OPS_DIAG_REPORT_MAX_AGE_DAYS:-30}
+
+# Diagnostic reports newer than this are never touched, whatever the setting:
+# they are how a crash that follows a cleanup is detected.
+MAC_OPS_DIAG_REPORT_MIN_AGE_DAYS=30
 
 # --- Cleanup target extensions ---
 MAC_OPS_LOG_EXTENSIONS=("log" "crash" "diag" "spin" "hang")
 
 # -----------------------------------------------------------------------------
 # Log cleanup main function
-# Cleanup based on ~/Library/Logs (7 days), DiagnosticReports (14 days)
+# Cleanup based on ~/Library/Logs (7 days), DiagnosticReports (30 days, never less)
 # -----------------------------------------------------------------------------
 mac_ops_log_cleanup() {
   local logs_dir="${HOME}/Library/Logs"
   local diag_dir="${HOME}/Library/Logs/DiagnosticReports"
+  local diag_days="${MAC_OPS_DIAG_REPORT_MAX_AGE_DAYS}"
 
   mac_ops_log_info "Log cleanup started"
 
   # 1. ~/Library/Logs general log cleanup
   if [[ -d "${logs_dir}" ]]; then
-    _mac_ops_log_clean_dir "${logs_dir}" "${MAC_OPS_LOG_CLEANUP_MAX_AGE_DAYS}" "log-expired"
+    # DiagnosticReports is excluded here: it has its own, longer retention below
+    mac_ops_log_debug "Protected, skipped (log-cleanup): ${diag_dir} (reason: excluded from the ${MAC_OPS_LOG_CLEANUP_MAX_AGE_DAYS}-day pass)"
+    _mac_ops_log_clean_dir "${logs_dir}" "${MAC_OPS_LOG_CLEANUP_MAX_AGE_DAYS}" "log-expired" "${diag_dir}"
   else
     mac_ops_log_debug "Log directory does not exist: ${logs_dir}"
   fi
 
   # 2. DiagnosticReports cleanup (longer retention period applied)
+  if [[ ! "${diag_days}" =~ ^[0-9]+$ || ${diag_days} -lt ${MAC_OPS_DIAG_REPORT_MIN_AGE_DAYS} ]]; then
+    mac_ops_log_debug "Diagnostic report threshold raised to ${MAC_OPS_DIAG_REPORT_MIN_AGE_DAYS} days (configured: ${diag_days})"
+    diag_days="${MAC_OPS_DIAG_REPORT_MIN_AGE_DAYS}"
+  fi
   if [[ -d "${diag_dir}" ]]; then
-    _mac_ops_log_clean_dir "${diag_dir}" "${MAC_OPS_DIAG_REPORT_MAX_AGE_DAYS}" "diagnostic-report-expired"
+    _mac_ops_log_clean_dir "${diag_dir}" "${diag_days}" "diagnostic-report-expired"
   else
     mac_ops_log_debug "Diagnostic report directory does not exist: ${diag_dir}"
   fi
@@ -41,12 +52,13 @@ mac_ops_log_cleanup() {
 
 # -----------------------------------------------------------------------------
 # Internal: Cleanup old files with target extensions in directory
-# Usage: _mac_ops_log_clean_dir <directory> <max_days> <reason>
+# Usage: _mac_ops_log_clean_dir <directory> <max_days> <reason> [excluded_subdirectory]
 # -----------------------------------------------------------------------------
 _mac_ops_log_clean_dir() {
   local target_dir="${1}"
   local max_age_days="${2}"
   local reason="${3}"
+  local exclude_dir="${4:-}"
   local now_epoch
   local threshold_seconds=$((max_age_days * 86400))
   local find_args=()
@@ -75,8 +87,13 @@ _mac_ops_log_clean_dir() {
 
   count=0
 
-  # Search target files with find
-  file_list=$(find "${target_dir}" -maxdepth 5 -type f \( "${find_args[@]}" \) 2>/dev/null)
+  # Search target files with find (an empty result, also on failure, moves nothing)
+  if [[ -n "${exclude_dir}" ]]; then
+    file_list=$(find "${target_dir}" -maxdepth 5 -path "${exclude_dir}" -prune -o \
+      -type f \( "${find_args[@]}" \) -print 2>/dev/null)
+  else
+    file_list=$(find "${target_dir}" -maxdepth 5 -type f \( "${find_args[@]}" \) 2>/dev/null)
+  fi
 
   if [[ -z "${file_list}" ]]; then
     mac_ops_log_debug "${target_dir}: No cleanup targets"
@@ -96,6 +113,11 @@ _mac_ops_log_clean_dir() {
     # Calculate elapsed time
     age_seconds=$((now_epoch - mtime))
     if [[ ${age_seconds} -lt ${threshold_seconds} ]]; then
+      continue
+    fi
+
+    # Security software, socket/FIFO, still open in a running app
+    if ! _mac_ops_fc_guard "${file_path}" "log-cleanup"; then
       continue
     fi
 
