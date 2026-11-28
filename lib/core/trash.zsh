@@ -1953,6 +1953,41 @@ _mac_ops_trash_volume_free_kb() {
 }
 
 # -----------------------------------------------------------------------------
+# Remove empty leftover directories in the trash, deepest first, except an
+# indexed trash path (a trashed empty directory must stay restorable) and
+# the parent directories of indexed paths. The caller holds the index lock
+# and has the index loaded. Not for dry-run.
+# -----------------------------------------------------------------------------
+_mac_ops_trash_sweep_empty_dirs() {
+  setopt LOCAL_OPTIONS NO_ERR_EXIT
+  [[ -n "${MAC_OPS_TRASH_DIR}" && -d "${MAC_OPS_TRASH_DIR}" ]] || return 0
+  local -A sweep_keep
+  local key tp parent d
+  for key in "${_MAC_OPS_IDX_KEYS[@]}" "${_MAC_OPS_IDX_QKEYS[@]}"; do
+    tp="${_MAC_OPS_IDX_TRASH[${key}]}"
+    [[ -n "${tp}" ]] || continue
+    sweep_keep[${tp}]=1
+    parent="${tp%/*}"
+    while [[ "${parent}" == "${MAC_OPS_TRASH_DIR}/"* ]]; do
+      sweep_keep[${parent}]=1
+      parent="${parent%/*}"
+    done
+  done
+  # rmdir removes only empty directories; repeat so parents emptied by a
+  # pass are removed by the next one
+  local -i pass removed
+  for (( pass = 0; pass < 64; pass++ )); do
+    removed=0
+    while IFS= read -r -d '' d; do
+      [[ -n "${sweep_keep[${d}]+_}" ]] && continue
+      rmdir -- "${d}" 2>/dev/null && removed=$((removed + 1))
+    done < <(find "${MAC_OPS_TRASH_DIR}" -mindepth 1 -type d -empty -print0 2>/dev/null)
+    (( removed == 0 )) && break
+  done
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # Permanently delete expired items
 # Reconciles the index with the disk first, then deletes entries whose
 # expire_after is before the current time - except entries the reconcile of
@@ -1981,7 +2016,7 @@ mac_ops_trash_expire() {
   if [[ "${dry}" == true ]]; then
     mac_ops_log_info "[DRY_RUN] Will remove empty directories in ${MAC_OPS_TRASH_DIR}"
   else
-    find "${MAC_OPS_TRASH_DIR}" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    _mac_ops_trash_sweep_empty_dirs
   fi
   _mac_ops_trash_reconcile_locked
 
@@ -2132,7 +2167,7 @@ mac_ops_trash_expire() {
 
   # Clean up empty directories
   if [[ "${dry}" != true ]]; then
-    find "${MAC_OPS_TRASH_DIR}" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    _mac_ops_trash_sweep_empty_dirs
   fi
 
   _mac_ops_index_unlock
@@ -2326,7 +2361,7 @@ _mac_ops_trash_restore_key_locked() {
   mac_ops_index_write || true
 
   # Clean up empty directories
-  find "${MAC_OPS_TRASH_DIR}" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+  _mac_ops_trash_sweep_empty_dirs
 
   mac_ops_log_info "Restore completed: ${original_path}"
   REPLY="restored"

@@ -846,6 +846,29 @@ test_trash_bookkeeping_case() {
 }
 test_trash_bookkeeping_case
 
+# A trashed empty directory is not swept as an empty leftover: it stays in
+# the trash and restorable; unindexed empty leftovers are still removed
+test_trash_indexed_empty_dir_kept() {
+    print "[TEST] test_trash_indexed_empty_dir_kept"
+    _t5_reset_trash
+    local base="${TEST_TMPDIR}/files/emptydirs" rc
+    rm -rf -- "${base}"
+    mkdir -p "${base}/EmptyA" "${base}/EmptyB"
+    mac_ops_trash_move "${base}/EmptyA" "test" "test-module" >/dev/null 2>&1
+    mac_ops_trash_move "${base}/EmptyB" "test" "test-module" >/dev/null 2>&1
+    mkdir -p "${MAC_OPS_TRASH_DIR}/leftover/deeper"
+    assert_eq "$([[ -d "${MAC_OPS_TRASH_DIR}${base}/EmptyA" ]] && print yes)" "yes" "empty directory moved to the trash"
+    mac_ops_trash_expire >/dev/null 2>&1
+    assert_eq "$([[ -d "${MAC_OPS_TRASH_DIR}${base}/EmptyA" ]] && print kept || print swept)" "kept" "purge pass keeps an indexed empty directory"
+    assert_eq "$([[ -e "${MAC_OPS_TRASH_DIR}/leftover" ]] && print kept || print swept)" "swept" "unindexed empty leftovers are still removed"
+    rc=0; mac_ops_trash_restore "${base}/EmptyA" >/dev/null 2>&1 || rc=$?
+    assert_eq "${rc}/$([[ -d "${base}/EmptyA" ]] && print back)" "0/back" "trashed empty directory is restorable after a purge pass"
+    assert_eq "$([[ -d "${MAC_OPS_TRASH_DIR}${base}/EmptyB" ]] && print kept || print swept)" "kept" "restore sweep keeps another indexed empty directory"
+    rm -rf -- "${base}"
+    _t5_reset_trash
+}
+test_trash_indexed_empty_dir_kept
+
 print ""
 
 # =============================================================================
