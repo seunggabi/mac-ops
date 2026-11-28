@@ -116,7 +116,8 @@ mac_ops_print_summary() {
 }
 
 # Print system report with before/after snapshots and cleanup summary
-# Args: before_snapshot, after_snapshot, cleaned_count, cleaned_bytes, killed_procs
+# Args: before_snapshot, after_snapshot, cleaned_count, cleaned_bytes, killed_procs,
+#       data_moved (optional: items moved out of settings/app-data areas)
 # Snapshot format: "disk_usage_pct disk_available_bytes mem_used_bytes mem_total_bytes"
 mac_ops_print_report() {
   local before_snapshot="$1"
@@ -124,6 +125,7 @@ mac_ops_print_report() {
   local cleaned_count="$3"
   local cleaned_bytes="$4"
   local killed_procs="$5"
+  local data_moved="${6:-0}"
 
   # Parse before snapshot
   local before_disk_usage before_disk_free before_mem_used before_mem_total
@@ -223,6 +225,10 @@ mac_ops_print_report() {
 
   if [[ -n "$cleaned_count" && "$cleaned_count" != "0" ]]; then
     echo "$(mac_ops_color_green "✓") Files cleaned: ${cleaned_count} items (${formatted_size})"
+  fi
+
+  if [[ -n "$data_moved" && "$data_moved" != "0" ]]; then
+    echo "$(mac_ops_color_yellow "⚠") ${data_moved} data items moved (settings/app data; see WARN lines in the log)"
   fi
 
   if [[ -n "$killed_procs" && "$killed_procs" != "0" ]]; then

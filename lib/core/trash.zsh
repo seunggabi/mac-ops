@@ -48,6 +48,21 @@ typeset -gA _MAC_OPS_RECONCILED_KEYS
 typeset -g _MAC_OPS_OPEN_FILES_MEM=""
 typeset -g _MAC_OPS_OPEN_FILES_MEM_TIME=0
 
+# Settings/app-data areas under ${HOME}: every move from one of them is
+# logged at WARN with module and reason and counted separately
+typeset -ga MAC_OPS_DATA_AREAS
+MAC_OPS_DATA_AREAS=(
+  "Library/Application Support"
+  "Library/Preferences"
+  "Library/Containers"
+  "Library/HTTPStorages"
+  "Library/WebKit"
+  "Library/Group Containers"
+)
+
+# Data-area items moved (or, in dry-run, that would be moved) in this run
+typeset -gi MAC_OPS_DATA_MOVED_COUNT=0
+
 # zsh/system: real PID of a subshell ($$ stays the parent PID in subshells)
 #             and "zsystem flock"
 # zsh/files:  zf_mv is a plain rename(2) and never falls back to copy + delete
@@ -983,6 +998,39 @@ _mac_ops_path_open_state() {
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# Is a path inside one of MAC_OPS_DATA_AREAS (settings / app data)? Checks the
+# path as given and symlink-resolved. Result: 0 if yes (REPLY = the area).
+# Usage: _mac_ops_is_data_area <absolute path>
+# -----------------------------------------------------------------------------
+_mac_ops_is_data_area() {
+  local p area base
+  for area in "${MAC_OPS_DATA_AREAS[@]}"; do
+    base="${HOME}/${area}"
+    for p in "${1}" "${1:A}"; do
+      if [[ "${p}" == "${base}" || "${p}" == "${base}/"* \
+        || "${p}" == "${base:A}" || "${p}" == "${base:A}/"* ]]; then
+        REPLY="${base}"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+# -----------------------------------------------------------------------------
+# Record a successful move out of a data area: WARN line + separate counter.
+# Usage: _mac_ops_note_data_move <abs path> <reason> <module> [dry-run]
+# -----------------------------------------------------------------------------
+_mac_ops_note_data_move() {
+  MAC_OPS_DATA_MOVED_COUNT=$((MAC_OPS_DATA_MOVED_COUNT + 1))
+  if [[ "${4}" == "dry-run" ]]; then
+    mac_ops_log_warn "[DRY_RUN] Will move settings/app data to trash: ${1} (module: ${3}, reason: ${2})"
+  else
+    mac_ops_log_warn "Moved settings/app data to trash: ${1} (module: ${3}, reason: ${2})"
+  fi
+}
+
+# -----------------------------------------------------------------------------
 # Move file/directory to trash (all-or-nothing)
 # Usage: mac_ops_trash_move <source_path> <reason> <module_name>
 #
@@ -1062,9 +1110,14 @@ mac_ops_trash_move() {
     esac
   fi
 
+  # Settings/app data: logged at WARN and counted after a successful move
+  local data_move=false
+  _mac_ops_is_data_area "${abs_source}" && data_move=true
+
   # DRY_RUN mode
   if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
     mac_ops_log_info "[DRY_RUN] Will move to trash: ${abs_source} (reason: ${reason})"
+    [[ "${data_move}" == true ]] && _mac_ops_note_data_move "${abs_source}" "${reason}" "${module_name}" dry-run
     return 0
   fi
 
@@ -1117,6 +1170,7 @@ mac_ops_trash_move() {
     fi
     _mac_ops_index_unlock
     mac_ops_log_info "Moved to trash: ${abs_source} (${size_bytes} bytes, reason: ${reason})"
+    [[ "${data_move}" == true ]] && _mac_ops_note_data_move "${abs_source}" "${reason}" "${module_name}"
     return 0
   fi
 
@@ -1200,6 +1254,7 @@ mac_ops_trash_move() {
   fi
 
   mac_ops_log_info "Moved to trash: ${abs_source} (${size_bytes} bytes, reason: ${reason})"
+  [[ "${data_move}" == true ]] && _mac_ops_note_data_move "${abs_source}" "${reason}" "${module_name}"
   return 0
 }
 

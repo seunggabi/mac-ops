@@ -661,6 +661,60 @@ test_selfprotect_symlink
 test_selfprotect_allows_ordinary
 test_selfprotect_trash_move_refuses
 
+print ""
+
+# =============================================================================
+# Loud data moves (item 7): settings/app-data areas are WARNed and counted
+# =============================================================================
+test_data_move_logged_and_counted() {
+    print "[TEST] data_move_logged_and_counted"
+    _t5_reset_trash
+    local src="${HOME}/Library/Application Support/X"
+    mkdir -p "${src}" "${HOME}/Library/Caches/com.example.data"
+    print "settings" > "${src}/prefs.json"
+    print "cache" > "${HOME}/Library/Caches/com.example.data/c.bin"
+    MAC_OPS_DATA_MOVED_COUNT=0
+    local log_before=0
+    [[ -f "${MAC_OPS_LOG_FILE}" ]] && log_before=$(wc -l < "${MAC_OPS_LOG_FILE}")
+    mac_ops_trash_move "${src}" "orphan app data" "orphan-app-cleanup" >/dev/null 2>&1
+    assert_eq "$?" "0" "move from Application Support succeeds"
+    assert_eq "${MAC_OPS_DATA_MOVED_COUNT}" "1" "data move counted"
+    local new_log
+    new_log=$(tail -n +$((log_before + 1)) "${MAC_OPS_LOG_FILE}" 2>/dev/null)
+    assert_output_contains "${new_log}" "[WARN] Moved settings/app data to trash: ${src} (module: orphan-app-cleanup, reason: orphan app data)" "data move logged at WARN with module and reason"
+
+    mac_ops_trash_move "${HOME}/Library/Caches/com.example.data" "cache-expired" "cache-cleanup" >/dev/null 2>&1
+    assert_eq "${MAC_OPS_DATA_MOVED_COUNT}" "1" "cache move is not counted as data"
+
+    mkdir -p "${HOME}/Library/Preferences/p.d"
+    MAC_OPS_DRY_RUN=true mac_ops_trash_move "${HOME}/Library/Preferences/p.d" "test" "test-module" >/dev/null 2>&1
+    assert_eq "${MAC_OPS_DATA_MOVED_COUNT}" "2" "dry-run data move counted too"
+    assert_eq "$([[ -d "${HOME}/Library/Preferences/p.d" ]] && print kept)" "kept" "dry-run moves nothing"
+
+    local out
+    out=$(mac_ops_print_report "10 1000 0 0" "10 1000 0 0" "3" "100" "0" "2")
+    assert_output_contains "${out}" "2 data items moved" "run summary shows data items moved"
+}
+
+test_data_move_count_survives_parallel_stats() {
+    print "[TEST] data_move_count_survives_parallel_stats"
+    reset_fixture
+    local out
+    out=$(fx_zsh -- '
+        for f in ${(v)MAC_OPS_MODULE_MAP}; do eval "${f}() { :; }"; done
+        mac_ops_cache_cleanup() { MAC_OPS_CLEANED_COUNT=3; MAC_OPS_DATA_MOVED_COUNT=2; }
+        mac_ops_tmp_cleanup() { MAC_OPS_DATA_MOVED_COUNT=1; }
+        mkdir -p "${MAC_OPS_HOME}/stats" "${MAC_OPS_LOG_DIR}"
+        MAC_OPS_CLEANED_COUNT=0 MAC_OPS_CLEANED_BYTES=0 MAC_OPS_DATA_MOVED_COUNT=0
+        mac_ops_load_config
+        mac_ops_run_modules "" "${MAC_OPS_HOME}/stats" >/dev/null 2>&1
+        print "count=${MAC_OPS_CLEANED_COUNT} data=${MAC_OPS_DATA_MOVED_COUNT}"' 2>&1)
+    assert_output_contains "${out}" "count=3 data=3" "data-moved count from parallel modules is summed via stats files"
+}
+
+test_data_move_logged_and_counted
+test_data_move_count_survives_parallel_stats
+
 # --- Teardown ---
 rm -rf "${TEST_TMPDIR}"
 

@@ -56,13 +56,16 @@ mac_ops_module_selected() {
 # Usage: mac_ops_run_modules <target_module or ""> <stats_dir>
 # With a target (--module=NAME) only that module runs, even when it is
 # disabled in the configuration: an explicit request is honoured and logged.
-# Without a target every enabled module runs. Updates MAC_OPS_CLEANED_COUNT
-# and MAC_OPS_CLEANED_BYTES. Returns 1 for an unknown module.
+# Without a target every enabled module runs. Updates MAC_OPS_CLEANED_COUNT,
+# MAC_OPS_CLEANED_BYTES and MAC_OPS_DATA_MOVED_COUNT. Returns 1 for an
+# unknown module.
+# Parallel modules run in subshells; each writes "<count> <bytes> <data moved>"
+# to <stats_dir>/<function>.stats, summed here afterwards.
 # -----------------------------------------------------------------------------
 mac_ops_run_modules() {
   local target_module="$1"
   local stats_dir="$2"
-  local mod func cfg mod_count mod_bytes stats_file
+  local mod func cfg mod_count mod_bytes mod_data stats_file
 
   if [[ -n "${target_module}" ]]; then
     if [[ -z "${MAC_OPS_MODULE_MAP[${target_module}]+_}" ]]; then
@@ -88,9 +91,10 @@ mac_ops_run_modules() {
     (
       MAC_OPS_CLEANED_COUNT=0
       MAC_OPS_CLEANED_BYTES=0
+      MAC_OPS_DATA_MOVED_COUNT=0
       ${func} || true
       # Record statistics to file
-      print "${MAC_OPS_CLEANED_COUNT} ${MAC_OPS_CLEANED_BYTES}" > "${stats_dir}/${func}.stats"
+      print "${MAC_OPS_CLEANED_COUNT} ${MAC_OPS_CLEANED_BYTES} ${MAC_OPS_DATA_MOVED_COUNT}" > "${stats_dir}/${func}.stats"
     ) &
     pids+=($!)
   done
@@ -104,10 +108,14 @@ mac_ops_run_modules() {
   # shellcheck disable=SC1073,SC1036,SC1058,SC1072
   for stats_file in "${stats_dir}"/*.stats(N); do
     [[ ! -f "${stats_file}" ]] && continue
-    mod_count=0; mod_bytes=0
-    read -r mod_count mod_bytes < "${stats_file}" 2>/dev/null || continue
-    MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + ${mod_count:-0}))
-    MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + ${mod_bytes:-0}))
+    mod_count=0; mod_bytes=0; mod_data=0
+    read -r mod_count mod_bytes mod_data < "${stats_file}" 2>/dev/null || continue
+    [[ "${mod_count}" =~ ^[0-9]+$ ]] || mod_count=0
+    [[ "${mod_bytes}" =~ ^[0-9]+$ ]] || mod_bytes=0
+    [[ "${mod_data}" =~ ^[0-9]+$ ]] || mod_data=0
+    MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + mod_count))
+    MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + mod_bytes))
+    MAC_OPS_DATA_MOVED_COUNT=$((MAC_OPS_DATA_MOVED_COUNT + mod_data))
   done
 
   mac_ops_log_info "Starting sequential execution of process modules"

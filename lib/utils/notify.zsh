@@ -25,7 +25,8 @@ mac_ops_notify() {
 }
 
 # Cleanup completion notification
-# Args: cleaned_count, cleaned_bytes, killed_procs, disk_before_pct (optional), disk_after_pct (optional)
+# Args: cleaned_count, cleaned_bytes, killed_procs, disk_before_pct (optional), disk_after_pct (optional),
+#       data_moved (optional: items moved out of settings/app-data areas)
 # Do not notify if no items were cleaned (count is 0)
 mac_ops_notify_completion() {
   local cleaned_count="$1"
@@ -33,6 +34,7 @@ mac_ops_notify_completion() {
   local killed_procs="$3"
   local disk_before_pct="${4:-}"
   local disk_after_pct="${5:-}"
+  local data_moved="${6:-0}"
   local formatted_size
   local message_parts=()
   local message
@@ -46,6 +48,10 @@ mac_ops_notify_completion() {
   if [[ -n "$cleaned_count" && "$cleaned_count" != "0" ]]; then
     formatted_size=$(mac_ops_format_bytes "$cleaned_bytes")
     message_parts+=("${cleaned_count} files cleaned, ${formatted_size} freed")
+  fi
+
+  if [[ -n "$data_moved" && "$data_moved" != "0" ]]; then
+    message_parts+=("${data_moved} data items moved")
   fi
 
   if [[ -n "$killed_procs" && "$killed_procs" != "0" ]]; then
