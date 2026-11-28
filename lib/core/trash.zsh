@@ -2090,10 +2090,50 @@ _mac_ops_trash_restore_key_locked() {
     mkdir -p "${restore_parent}" 2>/dev/null || true
   fi
 
-  # Execute restore
-  if ! mv "${trash_path}" "${original_path}" 2>/dev/null; then
-    mac_ops_log_error "Restore failed: ${trash_path} -> ${original_path}"
-    REPLY="failed"
+  # Execute restore. The destination may appear between the check above and
+  # the move: "mv -n" never overwrites, and the outcome is classified by the
+  # state afterwards (not by mv's exit status). A directory (or a link to
+  # one) that appeared would receive the item inside it: moved back, refused.
+  local item_name="${trash_path:t}" item_id inner_id dest_id
+  local item_was_dir=false had_self_child=false
+  item_id=$(stat -f '%d:%i' -- "${trash_path}" 2>/dev/null) || item_id=""
+  if [[ -d "${trash_path}" && ! -L "${trash_path}" ]]; then
+    item_was_dir=true
+    [[ -e "${trash_path}/${item_name}" || -L "${trash_path}/${item_name}" ]] && had_self_child=true
+  fi
+  mv -n "${trash_path}" "${original_path}" 2>/dev/null || true
+  if [[ -e "${trash_path}" || -L "${trash_path}" ]]; then
+    if [[ -e "${original_path}" || -L "${original_path}" ]]; then
+      mac_ops_log_error "Restore refused, destination appeared: ${original_path}"
+      REPLY="exists"
+    else
+      mac_ops_log_error "Restore failed: ${trash_path} -> ${original_path}"
+      REPLY="failed"
+    fi
+    return 1
+  fi
+  dest_id=$(stat -f '%d:%i' -- "${original_path}" 2>/dev/null) || dest_id=""
+  inner_id=$(stat -f '%d:%i' -- "${original_path}/${item_name}" 2>/dev/null) || inner_id=""
+  local landed_inside=false
+  if [[ -n "${item_id}" && "${dest_id}" == "${item_id}" ]]; then
+    landed_inside=false
+  elif [[ -n "${item_id}" && "${inner_id}" == "${item_id}" ]]; then
+    landed_inside=true
+  elif [[ -n "${inner_id}" && -d "${original_path}" ]]; then
+    # Moved across volumes (new inode): a file item at a directory, or a
+    # directory item that had no child of its own name, landed inside
+    if [[ "${item_was_dir}" != true || "${had_self_child}" != true ]]; then
+      landed_inside=true
+    fi
+  fi
+  if [[ "${landed_inside}" == true ]]; then
+    mv -n "${original_path}/${item_name}" "${trash_path}" 2>/dev/null || true
+    if [[ -e "${trash_path}" || -L "${trash_path}" ]]; then
+      mac_ops_log_error "Restore refused, a directory appeared at the destination: ${original_path} (item kept in the trash)"
+    else
+      mac_ops_log_error "Restore refused, a directory appeared at the destination: ${original_path}; the item is now at ${original_path}/${item_name}"
+    fi
+    REPLY="exists"
     return 1
   fi
 

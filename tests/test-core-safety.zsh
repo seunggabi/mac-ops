@@ -1297,6 +1297,46 @@ test_run_restore_nested_order() {
     rm -rf -- "${base}"
 }
 
+# Restore when the destination appears between the check and the move: the
+# test's mv() plants the destination, then runs the real mv
+test_restore_destination_race() {
+    _t5_reset_trash
+    local base="${HOME}/b9race" out rc
+    rm -rf -- "${base}"; mkdir -p "${base}"
+
+    # A file appears at the destination: never overwritten
+    print item > "${base}/f.txt"
+    mac_ops_trash_move "${base}/f.txt" "test" "mod-a" >/dev/null 2>&1
+    mv() { print planted > "${base}/f.txt"; command mv "$@"; }
+    rc=0; mac_ops_trash_restore "${base}/f.txt" >/dev/null 2>&1 || rc=$?
+    unset -f mv
+    assert_eq "${rc}" "1" "restore: file appearing at the destination is refused"
+    assert_eq "$(cat "${base}/f.txt")" "planted" "restore: appeared file is not overwritten"
+    assert_eq "$(mac_ops_index_read >/dev/null 2>&1; for k in "${(@k)_MAC_OPS_IDX_ORIG}"; do [[ "${_MAC_OPS_IDX_ORIG[$k]}" == "${base}/f.txt" ]] && cat "${_MAC_OPS_IDX_TRASH[$k]}"; done)" "item" "restore: refused item stays in the trash and the index"
+
+    # A directory appears at the destination: the item must not land inside it
+    rm -f -- "${base}/f.txt"
+    mac_ops_trash_restore "${base}/f.txt" >/dev/null 2>&1
+    print item2 > "${base}/g.txt"
+    mac_ops_trash_move "${base}/g.txt" "test" "mod-a" >/dev/null 2>&1
+    mv() { mkdir -p "${base}/g.txt"; mv() { command mv "$@"; }; command mv "$@"; }
+    rc=0; out=$(mac_ops_trash_restore "${base}/g.txt" 2>&1) || rc=$?
+    unset -f mv
+    assert_eq "${rc}" "1" "restore: directory appearing at the destination is refused"
+    assert_eq "$(ls -A "${base}/g.txt" | grep -c .)" "0" "restore: item not left inside the appeared directory"
+    assert_output_contains "${out}" "item kept in the trash" "restore: item moved back into the trash"
+    assert_eq "$(mac_ops_index_read >/dev/null 2>&1; for k in "${(@k)_MAC_OPS_IDX_ORIG}"; do [[ "${_MAC_OPS_IDX_ORIG[$k]}" == "${base}/g.txt" ]] && cat "${_MAC_OPS_IDX_TRASH[$k]}"; done)" "item2" "restore: moved-back item still restorable from the index"
+
+    # Normal restore of a directory containing a child of its own name
+    rmdir "${base}/g.txt"
+    mkdir -p "${base}/d/d"; print n > "${base}/d/d/n.txt"
+    mac_ops_trash_move "${base}/d" "test" "mod-a" >/dev/null 2>&1
+    rc=0; mac_ops_trash_restore "${base}/d" >/dev/null 2>&1 || rc=$?
+    assert_eq "${rc}" "0" "restore: directory with a same-name child restores"
+    assert_eq "$(cat "${base}/d/d/n.txt" 2>/dev/null)" "n" "restore: same-name child tree intact"
+    rm -rf -- "${base}"
+}
+
 # bin/mac-ops status (read-only, under ERR_EXIT): alert on the first line
 test_status_cli_alert() {
     reset_fixture
@@ -1312,6 +1352,7 @@ test_status_cli_alert() {
 }
 
 test_run_restore_nested_order
+test_restore_destination_race
 test_status_cli_alert
 
 # --- Teardown ---
