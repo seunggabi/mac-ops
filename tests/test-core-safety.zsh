@@ -941,6 +941,38 @@ test_protected_system_processes() {
 }
 test_protected_system_processes
 
+# cache-cleanup (dry-run, fixture HOME): ms-playwright-mcp is never moved,
+# and the installed-app check matches bundle IDs as fixed strings
+test_cache_cleanup_names() {
+    print "[TEST] test_cache_cleanup_names"
+    local fx="${TEST_TMPDIR}/cachefx" out d
+    mkdir -p "${fx}/home/Library/Caches" "${fx}/home/Applications/Fx.app/Contents"
+    plutil -create xml1 "${fx}/home/Applications/Fx.app/Contents/Info.plist"
+    plutil -insert CFBundleIdentifier -string "org.macopstestXfixture" "${fx}/home/Applications/Fx.app/Contents/Info.plist"
+    for d in ms-playwright-mcp ms-playwright org.macopstest.fixture org.macopstestXfixture; do
+        mkdir -p "${fx}/home/Library/Caches/${d}"
+        print x > "${fx}/home/Library/Caches/${d}/f"
+    done
+    out=$(HOME="${fx}/home" zsh -f -c '
+        MAC_OPS_ROOT="$1"; fx="$2"
+        export MAC_OPS_HOME="${fx}/ops" MAC_OPS_LOG_DIR="${fx}/ops/.logs" MAC_OPS_TRASH_DIR="${fx}/ops/.trash"
+        export MAC_OPS_DRY_RUN=true MAC_OPS_VERBOSE=true MAC_OPS_SCHEDULED=false
+        for f in core/config core/logger core/trash core/safety core/ignore utils/format utils/security-keywords utils/running; do
+            source "${MAC_OPS_ROOT}/lib/${f}.zsh"
+        done
+        source "${MAC_OPS_ROOT}/lib/modules/tmp-cleanup.zsh"
+        source "${MAC_OPS_ROOT}/lib/modules/cache-cleanup.zsh"
+        _mac_ops_fc_load_running_apps() { _MAC_OPS_FC_RUNNING_BUNDLES=""; return 0; }
+        mac_ops_cache_cleanup
+    ' _ "${MAC_OPS_ROOT}" "${fx}" 2>&1)
+    assert_output_contains "${out}" "Protected, skipped (cache-cleanup): ${fx}/home/Library/Caches/ms-playwright-mcp (reason: not a disposable cache)" "ms-playwright-mcp is never moved"
+    assert_output_contains "${out}" "Protected, skipped (cache-cleanup): ${fx}/home/Library/Caches/ms-playwright (reason: not a disposable cache)" "ms-playwright is never moved"
+    assert_output_contains "${out}" "Installed app cache protected: org.macopstestXfixture" "installed bundle ID still protects its cache"
+    assert_output_not_contains "${out}" "Installed app cache protected: org.macopstest.fixture" "a dot in a cache name is not a regex wildcard"
+    assert_eq "$(ls "${fx}/home/Library/Caches" | grep -c .)" "4" "dry-run moved nothing"
+}
+test_cache_cleanup_names
+
 print ""
 
 # =============================================================================

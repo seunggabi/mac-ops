@@ -10,8 +10,9 @@ MAC_OPS_CACHE_RECENT_DAYS=${MAC_OPS_CACHE_RECENT_DAYS:-7}  # Protect caches used
 
 # --- "Caches" that are not caches: never moved ---
 # ms-playwright: browser binaries used by running tools
+# ms-playwright-mcp: Playwright MCP server data (can hold a browser profile)
 # JetBrains: IDE indexes and caches (hours to rebuild)
-MAC_OPS_CACHE_PROTECTED_NAMES=("ms-playwright" "JetBrains")
+MAC_OPS_CACHE_PROTECTED_NAMES=("ms-playwright" "ms-playwright-mcp" "JetBrains")
 
 # -----------------------------------------------------------------------------
 # Internal: Print the package manager that owns a cache directory name
@@ -106,7 +107,8 @@ mac_ops_cache_cleanup() {
     fi
 
     # Skip if app is currently installed
-    if echo "${installed_bundles}" | grep -qx "${bundle_name}"; then
+    # Fixed-string match: a bundle ID's dots are not regex wildcards
+    if print -r -- "${installed_bundles}" | grep -qxF -- "${bundle_name}"; then
       mac_ops_log_debug "Installed app cache protected: ${bundle_name}"
       continue
     fi
