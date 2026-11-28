@@ -6,7 +6,8 @@
 # A zombie holds no memory, files or CPU: only a process-table slot. It is never
 # worth ending a live parent for, so this module never sends SIGTERM or SIGKILL
 # to anything. What it does:
-#   report (default) - log each zombie: PID, parent PID, parent executable, age
+#   report (default) - log each zombie: PID, parent PID, parent executable,
+#                      and the time since the process started (ps etime)
 #   sigchld          - also send SIGCHLD (a "reap your children" hint, harmless
 #                      to a correct program) to each eligible parent
 # Only the exact value "sigchld" signals. Every other value behaves like "report".
@@ -68,7 +69,7 @@ mac_ops_zombie_killer() {
     parent_name="${parent_exec:t}"
     found=$((found + 1))
 
-    mac_ops_log_info "Zombie PID ${pid}: parent PID ${ppid} (${parent_exec}), zombie for ${etime}"
+    mac_ops_log_info "Zombie PID ${pid}: parent PID ${ppid} (${parent_exec}), process started ${etime} ago"
 
     reason=$(_mac_ops_zombie_parent_unsafe "${ppid}" "${parent_exec}" "${parent_name}" "${(j: :)${(k)ancestors}}")
     if [[ -n "${reason}" ]]; then

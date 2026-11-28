@@ -77,7 +77,7 @@ Pure zsh. No Python, no Ruby, no Node.js. Only macOS built-in tools (`zsh`, `plu
 | `orphan` | Report orphan process candidates (sends SIGTERM only with `MAC_OPS_ORPHAN_ACTION=term`, never SIGKILL) |
 | `orphan-app` | Clean residual files from deleted applications |
 | `brew` | Clean Homebrew caches and outdated downloads (skipped while a running process uses an old keg) |
-| `dev` | Clean Xcode DerivedData/simulator, npm, yarn, pnpm, pip, Gradle, CocoaPods caches not used within 30 days (Xcode Archives are only reported) |
+| `dev` | Clean Xcode DerivedData and simulator caches, npm, yarn, pnpm, pip, Gradle and CocoaPods caches; DerivedData, CocoaPods and package-manager items used within 30 days are kept; Xcode Archives are only reported |
 | `docker` | Report Docker disk usage (opt-in: prune old unused images and build cache; never containers or volumes) |
 | `browser` | Clean Safari, Chrome, Firefox caches |
 
