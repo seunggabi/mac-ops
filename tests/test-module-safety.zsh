@@ -300,6 +300,50 @@ cache_output=$(
 )
 assert_output_contains "${cache_output}" "Will move to trash: ${CACHES}/com.macopstest.gone " "control: with a working lsappinfo the old cache is moved"
 
+# Run cache-cleanup in dry-run with a fake installed-app list.
+# Usage: run_cache_installed <bundle IDs, one per line>
+run_cache_installed() {
+    (
+        lsappinfo() { print -- '"Other" ASN:0x0-0x1: bundleID="com.example.running"'; return 0 }
+        # Only the /Applications scan is faked; every other find is the real one
+        find() {
+            if [[ "${1}" == /Applications ]]; then print -r -- "/Applications/Fake.app"; return 0; fi
+            command find "$@"
+        }
+        defaults() { print -r -- "${FAKE_INSTALLED_IDS}"; return 0 }
+        require_stubs lsappinfo find defaults
+        FAKE_INSTALLED_IDS="${1}"
+        _MAC_OPS_FC_RUNNING_BUNDLES=""
+        _MAC_OPS_FC_RUNNING_APPS_STATE=""
+        _MAC_OPS_FC_RUNNING_EXECS="${IDLE_PROCESSES}"
+        _MAC_OPS_FC_OPEN_PATHS="n/nonexistent/placeholder"
+        mac_ops_cache_cleanup 2>&1
+    )
+}
+
+print "[TEST] cache_cleanup_playwright_mcp_protected"
+mkdir -p "${CACHES}/ms-playwright-mcp/profile"
+print "x" > "${CACHES}/ms-playwright-mcp/profile/Cookies"
+make_old "${CACHES}/ms-playwright-mcp"
+cache_output=$(run_cache_installed "")
+assert_no_match "${cache_output}" "Will move to trash: ${CACHES}/ms-playwright-mcp( |/)" "ms-playwright-mcp is never moved"
+assert_output_contains "${cache_output}" "skipped (cache-cleanup): ${CACHES}/ms-playwright-mcp (reason: not a disposable cache)" "ms-playwright-mcp skip is logged"
+assert_output_contains "${cache_output}" "Will move to trash: ${CACHES}/com.macopstest.gone " "control: an old unprotected cache is still moved"
+
+print "[TEST] cache_cleanup_installed_match_is_literal"
+for name in com.macopstest.dotted "com.macopstest.br[acket" com.macopstest.installed; do
+    mkdir -p "${CACHES}/${name}"
+    print "x" > "${CACHES}/${name}/blob"
+    make_old "${CACHES}/${name}"
+done
+cache_output=$(run_cache_installed "comXmacopstestXdotted
+com.macopstest.br[acket
+com.macopstest.installed")
+assert_output_contains "${cache_output}" "Installed app cache protected: com.macopstest.installed" "installed app cache is protected"
+assert_output_contains "${cache_output}" "Installed app cache protected: com.macopstest.br[acket" "a bundle ID with [ is matched literally and protected"
+assert_no_match "${cache_output}" "Will move to trash: .*/com\.macopstest\.br\[acket " "a bundle ID with [ is not moved"
+assert_output_contains "${cache_output}" "Will move to trash: ${CACHES}/com.macopstest.dotted " "a dot in a cache name matches only a dot (comXmacopstestXdotted is not the same app)"
+
 print "[TEST] orphan_app_lsappinfo_failure"
 OA_FX="${TEST_TMPDIR}/oa"
 OA_ALL_APPS=$(find /Applications "${HOME}/Applications" /System/Applications -maxdepth 3 -name "*.app" -type d 2>/dev/null)
