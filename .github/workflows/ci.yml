@@ -19,6 +19,7 @@ jobs:
           zsh tests/test-modules.zsh
           zsh tests/test-file-cleanup.zsh
           zsh tests/test-orphan-killer.zsh
+          zsh tests/test-module-safety.zsh
 
   lint:
     runs-on: ubuntu-latest
