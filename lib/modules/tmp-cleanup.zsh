@@ -5,6 +5,10 @@
 # =============================================================================
 
 # --- Default settings ---
+# This module uses zsh-only syntax (parameter flags, nested expansions) that the bash-mode
+# linter cannot parse; these three checks are false positives for the whole file.
+# shellcheck disable=SC2296,SC2066,SC2299
+
 MAC_OPS_TMP_MAX_AGE_DAYS=${MAC_OPS_TMP_MAX_AGE_DAYS:-3}
 MAC_OPS_VAR_FOLDERS_MAX_AGE_DAYS=${MAC_OPS_VAR_FOLDERS_MAX_AGE_DAYS:-7}
 MAC_OPS_CRASH_MAX_AGE_DAYS=${MAC_OPS_CRASH_MAX_AGE_DAYS:-14}
@@ -116,7 +120,6 @@ _mac_ops_fc_load_running_execs() {
     return 1
   fi
 
-  # shellcheck disable=SC2296  # zsh (f) flag: split on newlines
   lines=("${(@f)ps_out}")
   for line in "${lines[@]}"; do
     read -r pid ppid comm <<< "${line}"
