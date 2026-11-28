@@ -646,6 +646,147 @@ test_trash_shared_path_waits_for_last_record
 test_trash_move_avoids_indexed_path
 test_trash_missing_path_record_dropped
 
+# Index records are untrusted: a trash path outside the trash (.., absolute
+# elsewhere, a bookkeeping file, a symlink inside the trash) is never purged,
+# and an original path that is relative, has "..", or is protected is never
+# restored to. Victim directories outside the trash must survive.
+test_trash_untrusted_index_paths() {
+    print "[TEST] test_trash_untrusted_index_paths"
+    _t5_reset_trash
+    local v="${TEST_TMPDIR}/victims"
+    rm -rf -- "${v}"
+    mkdir -p "${v}/dotdot" "${v}/abs" "${v}/link-target" "${v}/restore"
+    print keep > "${v}/dotdot/keep.txt"
+    print keep > "${v}/abs/keep.txt"
+    print keep > "${v}/link-target/data"
+    # TRASH/../../victims/dotdot resolves to the victim (TRASH is <ops>/.trash)
+    local dotdot_tp="${MAC_OPS_TRASH_DIR}/../../${v:t}/dotdot"
+    assert_eq "${dotdot_tp:A}" "${v:A}/dotdot" "fixture: the dotdot trash path resolves to the victim"
+    ln -s "${v}/link-target" "${MAC_OPS_TRASH_DIR}/lnk"
+    # A valid, expired record next to them is still purged
+    mkdir -p "${MAC_OPS_TRASH_DIR}${TEST_TMPDIR}/files/ok"
+    print ok > "${MAC_OPS_TRASH_DIR}${TEST_TMPDIR}/files/ok/f.txt"
+    mac_ops_index_read
+    _t5_add_record "q1_20260101000000" "${v}/dotdot" "${dotdot_tp}" "${PAST_ISO}"
+    _t5_add_record "q2_20260101000000" "${v}/abs" "${v}/abs" "${PAST_ISO}"
+    _t5_add_record "q3_20260101000000" "/x/index" "${MAC_OPS_TRASH_DIR}/.index.json" "${PAST_ISO}"
+    _t5_add_record "q4_20260101000000" "/x/rel" "${MAC_OPS_TRASH_DIR}/a/./b" "${PAST_ISO}"
+    _t5_add_record "s1_20260101000000" "${v}/link-target/data" "${MAC_OPS_TRASH_DIR}/lnk/data" "${PAST_ISO}"
+    _t5_add_record "ok_20260101000000" "${TEST_TMPDIR}/files/ok" "${MAC_OPS_TRASH_DIR}${TEST_TMPDIR}/files/ok" "${PAST_ISO}"
+    mac_ops_index_write
+
+    local out k
+    out=$(mac_ops_index_read 2>&1; print "keys=${_MAC_OPS_IDX_KEYS[*]}")
+    assert_output_contains "${out}" "Trash index record q1_20260101000000 ignored" "dotdot trash path is quarantined with a WARN"
+    assert_output_contains "${out}" "Trash index record q2_20260101000000 ignored" "trash path outside the trash is quarantined"
+    assert_output_contains "${out}" "Trash index record q3_20260101000000 ignored" "trash bookkeeping file as trash path is quarantined"
+    assert_output_contains "${out}" "Trash index record q4_20260101000000 ignored" "non-canonical trash path is quarantined"
+    for k in q1 q2 q3 q4; do
+        assert_output_not_contains "${out##*keys=}" "${k}_" "quarantined record ${k} is not an active key"
+    done
+
+    out=$(mac_ops_trash_expire 2>&1)
+    assert_eq "$(cat "${v}/dotdot/keep.txt" 2>/dev/null)" "keep" "purge never deletes through TRASH/../.. (victim survives)"
+    assert_eq "$(cat "${v}/abs/keep.txt" 2>/dev/null)" "keep" "purge never deletes a trash path outside the trash"
+    assert_eq "$(cat "${v}/link-target/data" 2>/dev/null)" "keep" "purge never deletes through a symlink inside the trash"
+    assert_output_contains "${out}" "NOT deleted, its path does not resolve inside" "symlinked trash path is refused at delete time"
+    assert_eq "$([[ -f "${MAC_OPS_INDEX_FILE}" ]] && plutil -convert xml1 -o /dev/null "${MAC_OPS_INDEX_FILE}" >/dev/null 2>&1 && print valid)" "valid" "index is valid JSON after the purge"
+    assert_eq "$([[ -e "${MAC_OPS_TRASH_DIR}${TEST_TMPDIR}/files/ok" ]] && print kept || print purged)" "purged" "valid expired record is still purged"
+    for k in q1 q2 q3 q4; do
+        assert_eq "$(grep -c "\"${k}_20260101000000\": {" "${MAC_OPS_INDEX_FILE}")" "1" "quarantined record ${k} is kept in the index file unchanged"
+    done
+
+    # Restore: unsafe original paths are refused before anything is created
+    _t5_reset_trash
+    mkdir -p "${MAC_OPS_TRASH_DIR}/r"
+    local n
+    for n in 1 2 3 4 5 6; do print "r${n}" > "${MAC_OPS_TRASH_DIR}/r/f${n}"; done
+    mac_ops_index_read
+    _t5_add_record "r1_20260101000000" "relative/f1" "${MAC_OPS_TRASH_DIR}/r/f1" "${FUTURE_ISO}"
+    _t5_add_record "r2_20260101000000" "${v}/restore/sub/../../../escaped" "${MAC_OPS_TRASH_DIR}/r/f2" "${FUTURE_ISO}"
+    _t5_add_record "r3_20260101000000" "${HOME}/Documents/f3" "${MAC_OPS_TRASH_DIR}/r/f3" "${FUTURE_ISO}"
+    _t5_add_record "r4_20260101000000" "${MAC_OPS_HOME}/.logs/f4" "${MAC_OPS_TRASH_DIR}/r/f4" "${FUTURE_ISO}"
+    _t5_add_record "r5_20260101000000" "/usr/mac-ops-test-f5" "${MAC_OPS_TRASH_DIR}/r/f5" "${FUTURE_ISO}"
+    _t5_add_record "r6_20260101000000" "${HOME}/Library/Preferences/com.example.f6.plist" "${MAC_OPS_TRASH_DIR}/r/f6" "${FUTURE_ISO}"
+    mac_ops_index_write
+    local results
+    # (in the fixture directory: a regression restores "relative/f1" below PWD;
+    # /usr is read-only under SIP)
+    results=$(
+        cd "${TEST_TMPDIR}" || exit 1
+        _mac_ops_index_lock
+        _mac_ops_index_load_locked
+        for n in 1 2 3 4 5 6; do
+            _mac_ops_trash_restore_key_locked "r${n}_20260101000000" >/dev/null 2>&1
+            print -n "r${n}=${REPLY} "
+        done
+        _mac_ops_index_unlock
+    )
+    assert_output_contains "${results}" "r1=unsafe" "restore to a relative original path is refused"
+    assert_output_contains "${results}" "r2=unsafe" "restore to an original path with .. is refused"
+    assert_output_contains "${results}" "r3=unsafe" "restore into ~/Documents (protected) is refused"
+    assert_output_contains "${results}" "r4=unsafe" "restore into the mac-ops home is refused"
+    assert_output_contains "${results}" "r5=unsafe" "restore under /usr (protected) is refused"
+    assert_output_contains "${results}" "r6=restored" "restore of a plist into ~/Library/Preferences is allowed"
+    assert_eq "$([[ -e "${v}/escaped" || -e "${v}/restore/sub" || -e "${HOME}/Documents" ]] && print created || print none)" "none" "refused restores create no directory and move nothing"
+    for n in 1 2 3 4 5; do
+        assert_eq "$(cat "${MAC_OPS_TRASH_DIR}/r/f${n}" 2>/dev/null)" "r${n}" "refused item r${n} stays in the trash"
+    done
+    assert_eq "$(cat "${HOME}/Library/Preferences/com.example.f6.plist" 2>/dev/null)" "r6" "allowed restore put the plist back"
+
+    # restore --run reports unsafe items as refused
+    mac_ops_index_read
+    _MAC_OPS_IDX_RUNID[r1_20260101000000]="20260101T000000-1"
+    mac_ops_index_write
+    mkdir -p "${MAC_OPS_HOME}/runs"
+    print '{"run_id": "20260101T000000-1", "items_moved": 1}' > "${MAC_OPS_HOME}/runs/20260101T000000-1.json"
+    out=$(cd "${TEST_TMPDIR}" || exit 1; source "${MAC_OPS_ROOT}/lib/core/run.zsh"; mac_ops_trash_restore_run 20260101T000000-1 2>&1)
+    assert_output_contains "${out}" "REFUSED (unsafe path): relative/f1" "restore --run lists an unsafe original path as refused"
+    rm -rf -- "${v}" "${MAC_OPS_HOME}/runs" "${HOME}/Library/Preferences/com.example.f6.plist"
+}
+
+# expire_after empty or unparsable: a fresh retention period from now (never
+# expired at once, never live forever); far-future expire_after is capped
+test_trash_bad_expire_restamped() {
+    print "[TEST] test_trash_bad_expire_restamped"
+    _t5_reset_trash
+    local base="${TEST_TMPDIR}/files/E"
+    local tp="${MAC_OPS_TRASH_DIR}${base}"
+    mkdir -p "${tp}/empty" "${tp}/garbage" "${tp}/far"
+    print e > "${tp}/empty/f"; print g > "${tp}/garbage/f"; print f > "${tp}/far/f"
+    print p > "${tp}/parent.txt"
+    mac_ops_index_read
+    _t5_add_record "x1_20260101000000" "${base}/empty" "${tp}/empty" ""
+    _t5_add_record "x2_20260101000000" "${base}/garbage" "${tp}/garbage" "next tuesday"
+    _t5_add_record "x3_20260101000000" "${base}/far" "${tp}/far" "2999-01-01T00:00:00Z"
+    _t5_add_record "x0_20260101000000" "${base}" "${tp}" "${PAST_ISO}"
+    mac_ops_index_write
+
+    local out now e k
+    now=$(date +%s)
+    out=$(mac_ops_trash_expire 2>&1)
+    assert_output_contains "${out}" "Trash record x1_20260101000000 has no valid expire_after ('')" "empty expire_after is warned"
+    assert_output_contains "${out}" "Trash record x2_20260101000000 has no valid expire_after ('next tuesday')" "unparsable expire_after is warned"
+    assert_output_contains "${out}" "Trash record x3_20260101000000 has expire_after 2999-01-01T00:00:00Z is more than 8760 hours away" "far-future expire_after is warned"
+    assert_eq "$(cat "${tp}/empty/f" "${tp}/garbage/f" "${tp}/far/f" 2>/dev/null | tr -d '\n')" "egf" "re-stamped records are not purged at once"
+    assert_output_contains "${out}" "postponed" "expired parent is postponed while re-stamped children are live"
+    mac_ops_index_read
+    for k in x1 x2 x3; do
+        _mac_ops_iso_to_epoch "${_MAC_OPS_IDX_EXPIRE[${k}_20260101000000]}"; e="${REPLY}"
+        assert_eq "$([[ -n "${e}" ]] && (( e >= now + 71 * 3600 && e <= now + 73 * 3600 )) && print fresh)" "fresh" "${k}: re-stamp is persisted as now + 72h"
+    done
+
+    # Second pass: the stamp holds, no new WARN; once it passes, all are purged
+    out=$(mac_ops_trash_expire 2>&1)
+    assert_output_not_contains "${out}" "has no valid expire_after" "re-stamped record is not re-stamped again"
+    for k in x1 x2 x3; do _t5_set_expire "${k}_20260101000000" "${PAST_ISO}"; done
+    mac_ops_trash_expire >/dev/null 2>&1
+    assert_eq "$([[ -e "${tp}" ]] && print kept || print purged)" "purged" "parent and children are purged once the fresh period ends"
+}
+
+test_trash_untrusted_index_paths
+test_trash_bad_expire_restamped
+
 print ""
 
 # =============================================================================

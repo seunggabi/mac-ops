@@ -384,6 +384,7 @@ mac_ops_trash_restore_run() {
     else
       case "${REPLY}" in
         exists)  refused=$((refused + 1)); print -r -- "REFUSED (destination exists): ${orig}" ;;
+        unsafe)  refused=$((refused + 1)); print -r -- "REFUSED (unsafe path): ${orig}" ;;
         missing) gone=$((gone + 1)); print -r -- "SKIPPED (no longer in the trash): ${orig}" ;;
         *)       failed=$((failed + 1)); print -r -- "FAILED: ${orig}" ;;
       esac

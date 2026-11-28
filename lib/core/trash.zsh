@@ -19,6 +19,17 @@ typeset -gA _MAC_OPS_IDX_ORIGTIME
 # Run that moved the entry (optional field; older records have none)
 typeset -gA _MAC_OPS_IDX_RUNID
 typeset -ga _MAC_OPS_IDX_KEYS
+# Quarantined records: their trash path is not a canonical path strictly
+# inside the trash (a damaged or forged index). Kept in the field arrays and
+# written back unchanged, but never in _MAC_OPS_IDX_KEYS, so nothing ever
+# purges, restores, lists or reconciles them.
+typeset -ga _MAC_OPS_IDX_QKEYS
+# Quarantined keys already warned about in this process (one WARN each)
+typeset -gA _MAC_OPS_IDX_QWARNED
+
+# Upper bound of a trash retention period (one year). A record that expires
+# later than this from now is re-stamped (see mac_ops_trash_expire).
+typeset -gi MAC_OPS_TRASH_MAX_RETENTION_HOURS=8760
 
 # Index lock file (fcntl lock via "zsystem flock"; the file itself is never
 # removed). The kernel releases the lock when its owner exits, so a lock can
@@ -70,6 +81,118 @@ typeset -gi MAC_OPS_DATA_MOVED_COUNT=0
 # zsh/files:  zf_mv is a plain rename(2) and never falls back to copy + delete
 zmodload zsh/system 2>/dev/null || true
 zmodload -F zsh/files b:zf_mv 2>/dev/null || true
+
+# =============================================================================
+# Index path validation (fork-free: runs on every index load, under the lock)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# May the index act on this trash path? Returns 0 only for an absolute,
+# canonical path (${p:a} == p: no ".", "..", "//" or trailing "/") strictly
+# inside MAC_OPS_TRASH_DIR that is not one of the trash's bookkeeping files.
+# Lexical only; _mac_ops_trash_path_physical_ok checks symlinks before use.
+# Usage: _mac_ops_trash_path_valid <trash_path>
+# -----------------------------------------------------------------------------
+_mac_ops_trash_path_valid() {
+  local p="${1}"
+  [[ -n "${p}" && -n "${MAC_OPS_TRASH_DIR}" && "${p}" == /* ]] || return 1
+  local trash="${MAC_OPS_TRASH_DIR:a}"
+  [[ "${trash}" != "/" && "${p:a}" == "${p}" && "${p}" == "${trash}/"?* ]] || return 1
+  local rel="${p#"${trash}/"}"
+  case "${rel%%/*}" in
+    .index.json*|.index.lock*|.index.flock|.index-recovery|.staging) return 1 ;;
+  esac
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Does the parent directory of a (valid) trash path physically resolve inside
+# the trash? A symbolic link inside the trash (a trashed link, or one planted
+# there) must never redirect a purge or a restore to a path outside it.
+# Checked right before the rm -rf of a purge and the mv of a restore.
+# Usage: _mac_ops_trash_path_physical_ok <trash_path>
+# -----------------------------------------------------------------------------
+_mac_ops_trash_path_physical_ok() {
+  local p="${1}"
+  _mac_ops_trash_path_valid "${p}" || return 1
+  local trash="${MAC_OPS_TRASH_DIR:a}"
+  local parent="${p:h}"
+  local real_trash="${trash:A}"
+  [[ -n "${real_trash}" && "${parent:A}" == "${real_trash}${parent#"${trash}"}" ]]
+}
+
+# -----------------------------------------------------------------------------
+# Move every loaded record whose trash path fails _mac_ops_trash_path_valid
+# from _MAC_OPS_IDX_KEYS to _MAC_OPS_IDX_QKEYS (WARN once per key and process).
+# Called after every index load (JSON file and legacy .plist metadata).
+# -----------------------------------------------------------------------------
+_mac_ops_index_quarantine_invalid() {
+  local key tp
+  local -a keep
+  keep=()
+  for key in "${_MAC_OPS_IDX_KEYS[@]}"; do
+    tp="${_MAC_OPS_IDX_TRASH[${key}]}"
+    if _mac_ops_trash_path_valid "${tp}"; then
+      keep+=("${key}")
+      continue
+    fi
+    (( ${_MAC_OPS_IDX_QKEYS[(Ie)${key}]} )) || _MAC_OPS_IDX_QKEYS+=("${key}")
+    if [[ -z "${_MAC_OPS_IDX_QWARNED[${key}]+_}" ]]; then
+      _MAC_OPS_IDX_QWARNED[${key}]=1
+      mac_ops_log_warn "Trash index record ${key} ignored: its trash path is not inside ${MAC_OPS_TRASH_DIR} (${tp:-<empty>}); it is never purged or restored. Check or remove it by hand: ${MAC_OPS_INDEX_FILE}"
+    fi
+  done
+  _MAC_OPS_IDX_KEYS=("${keep[@]}")
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# May an item be restored to this original path? Absolute and canonical (no
+# ".", ".." or "//" component), not "/", not the tool's own home or a
+# companion tool's directory (self-protection, which covers the trash), and
+# not a protected system or user path (MAC_OPS_WHITELIST). ~/Library/Preferences
+# itself is protected but the plist files inside it may be restored
+# (orphan-app moves them). Both the path and its symlink-resolved form are
+# checked. Fails closed when safety.zsh is not loaded. Reason in REPLY.
+# Usage: _mac_ops_trash_restore_target_ok <original_path>
+# -----------------------------------------------------------------------------
+_mac_ops_trash_restore_target_ok() {
+  local p="${1}" cand rule
+  REPLY=""
+  if [[ -z "${p}" || "${p}" != /* || "${p:a}" != "${p}" ]]; then
+    REPLY="not an absolute path without . or .. components"
+    return 1
+  fi
+  if [[ "${p}" == "/" ]]; then
+    REPLY="root directory"
+    return 1
+  fi
+  if (( ! ${+functions[_mac_ops_is_self_protected]} )); then
+    REPLY="self-protection check unavailable (lib/core/safety.zsh not loaded)"
+    return 1
+  fi
+  if _mac_ops_is_self_protected "${p}"; then
+    REPLY="self-protection rule ${REPLY}"
+    return 1
+  fi
+  if [[ "${p}" == "${MAC_OPS_TRASH_DIR:a}" || "${p}" == "${MAC_OPS_TRASH_DIR:a}/"* ]]; then
+    REPLY="inside the trash"
+    return 1
+  fi
+  for cand in "${p}" "${p:A}"; do
+    for rule in "${MAC_OPS_WHITELIST[@]}"; do
+      [[ -n "${rule}" ]] || continue
+      if [[ "${rule}" == "${HOME}/Library/Preferences" ]]; then
+        [[ "${cand}" == "${rule}" ]] || continue
+      elif [[ "${cand}" != "${rule}" && "${cand}" != "${rule}/"* ]]; then
+        continue
+      fi
+      REPLY="protected path rule ${rule}"
+      return 1
+    done
+  done
+  return 0
+}
 
 # =============================================================================
 # JSON index helper functions
@@ -412,6 +535,7 @@ _mac_ops_index_parse_file() {
 # -----------------------------------------------------------------------------
 _mac_ops_index_reset() {
   _MAC_OPS_IDX_KEYS=()
+  _MAC_OPS_IDX_QKEYS=()
   _MAC_OPS_IDX_ORIG=()
   _MAC_OPS_IDX_TRASH=()
   _MAC_OPS_IDX_REASON=()
@@ -454,6 +578,7 @@ mac_ops_index_read() {
   _mac_ops_index_reset
   _mac_ops_index_parse_file "${MAC_OPS_INDEX_FILE}"
   _mac_ops_migrate_plist_to_index memory
+  _mac_ops_index_quarantine_invalid
   return 0
 }
 
@@ -472,6 +597,7 @@ _mac_ops_index_load_locked() {
   _mac_ops_migrate_plist_to_index write || true
   _mac_ops_index_reset
   _mac_ops_index_parse_file "${MAC_OPS_INDEX_FILE}"
+  _mac_ops_index_quarantine_invalid
   return 0
 }
 
@@ -506,7 +632,8 @@ mac_ops_index_write() {
     local first=true
     local key
     local esc_orig="" esc_trash="" esc_reason="" esc_module=""
-    for key in "${_MAC_OPS_IDX_KEYS[@]}"; do
+    # Quarantined records are written back unchanged (never acted on)
+    for key in "${_MAC_OPS_IDX_KEYS[@]}" "${_MAC_OPS_IDX_QKEYS[@]}"; do
       if [[ "${first}" == true ]]; then
         first=false
       else
@@ -1529,7 +1656,7 @@ _mac_ops_trash_recover_tmp_locked() {
 
     for key in "${r_keys[@]}"; do
       tp="${r_trash[${key}]}"
-      [[ "${tp}" == "${MAC_OPS_TRASH_DIR}/"* ]] || continue
+      _mac_ops_trash_path_valid "${tp}" || continue
       [[ -e "${tp}" || -L "${tp}" ]] || continue
 
       # Never the bookkeeping files of the trash itself
@@ -1893,6 +2020,9 @@ mac_ops_trash_expire() {
   _mac_ops_trash_volume_free_kb
   local free_before_kb="${REPLY}"
 
+  local verb_prefix=""
+  [[ "${dry}" == true ]] && verb_prefix="[DRY_RUN] "
+
   # Collect keys to remove (cannot modify arrays during iteration)
   local remove_keys=()
   local key
@@ -1909,6 +2039,22 @@ mac_ops_trash_expire() {
   local -A path_keys path_live path_expire blocked_by
   local -a path_order
   local parent=""
+
+  # A record with an empty or unparsable expire_after, or one that expires
+  # more than MAC_OPS_TRASH_MAX_RETENTION_HOURS from now, would stay live (and
+  # postpone its parent) forever: it is re-stamped with a fresh retention
+  # period from now (never treated as already expired) and the index is
+  # written, so the next pass counts from this stamp.
+  local retention_h="${MAC_OPS_TRASH_RETENTION_HOURS}"
+  if [[ ! "${retention_h}" =~ ^[0-9]+$ ]] || (( retention_h > MAC_OPS_TRASH_MAX_RETENTION_HOURS )); then
+    retention_h=72
+  fi
+  local max_epoch=$(( now_epoch + MAC_OPS_TRASH_MAX_RETENTION_HOURS * 3600 ))
+  local restamp_iso="" restamp_why=""
+  local -i restamped=0
+  _mac_ops_epoch_to_iso "$(( now_epoch + retention_h * 3600 ))"
+  restamp_iso="${REPLY}"
+
   for key in "${_MAC_OPS_IDX_KEYS[@]}"; do
     trash_path="${_MAC_OPS_IDX_TRASH[${key}]}"
     # (records without a trash path are dropped by the reconcile above)
@@ -1919,13 +2065,31 @@ mac_ops_trash_expire() {
     fi
     path_keys[${trash_path}]+="${key} "
 
-    expires_epoch=""
     expires_at="${_MAC_OPS_IDX_EXPIRE[${key}]}"
     # Found by this pass's reconcile: it gets its full retention period.
+    if [[ -n "${_MAC_OPS_RECONCILED_KEYS[${key}]+_}" ]]; then
+      path_live[${trash_path}]=1
+      continue
+    fi
     # Convert ISO8601 (UTC) -> epoch. Without -u the "Z" time would be read as
     # local time and items would expire early/late by the UTC offset.
-    if [[ -z "${_MAC_OPS_RECONCILED_KEYS[${key}]+_}" && -n "${expires_at}" ]]; then
+    expires_epoch=""
+    if [[ -n "${expires_at}" ]]; then
       expires_epoch=$(date -u -jf '%Y-%m-%dT%H:%M:%SZ' "${expires_at}" '+%s' 2>/dev/null) || expires_epoch=""
+      [[ "${expires_epoch}" =~ ^[0-9]+$ ]] || expires_epoch=""
+    fi
+    restamp_why=""
+    if [[ -z "${expires_epoch}" ]]; then
+      restamp_why="no valid expire_after ('${expires_at}')"
+    elif (( expires_epoch > max_epoch )); then
+      restamp_why="expire_after ${expires_at} is more than ${MAC_OPS_TRASH_MAX_RETENTION_HOURS} hours away"
+    fi
+    if [[ -n "${restamp_why}" && -n "${restamp_iso}" ]]; then
+      mac_ops_log_warn "${verb_prefix}Trash record ${key} has ${restamp_why}: given a fresh retention period until ${restamp_iso} (${trash_path})"
+      _MAC_OPS_IDX_EXPIRE[${key}]="${restamp_iso}"
+      restamped=$((restamped + 1))
+      path_live[${trash_path}]=1
+      continue
     fi
     if [[ -z "${expires_epoch}" || ${now_epoch} -lt ${expires_epoch} ]]; then
       path_live[${trash_path}]=1
@@ -1945,8 +2109,6 @@ mac_ops_trash_expire() {
   done
 
   local -a path_key_list
-  local verb_prefix=""
-  [[ "${dry}" == true ]] && verb_prefix="[DRY_RUN] "
   for trash_path in "${path_order[@]}"; do
     [[ -n "${path_live[${trash_path}]+_}" ]] && continue
     path_key_list=(${=path_keys[${trash_path}]})
@@ -1958,6 +2120,16 @@ mac_ops_trash_expire() {
       continue
     fi
 
+    # Guard: a canonical path strictly inside MAC_OPS_TRASH_DIR whose parent
+    # resolves inside it (no symlink redirects the rm -rf). The index load
+    # already quarantined lexically invalid paths; this re-checks right
+    # before deleting.
+    if ! _mac_ops_trash_path_physical_ok "${trash_path}"; then
+      failed_count=$((failed_count + 1))
+      mac_ops_log_warn "${verb_prefix}Expired trash entry NOT deleted, its path does not resolve inside ${MAC_OPS_TRASH_DIR}: ${trash_path} (kept in index)"
+      continue
+    fi
+
     if [[ "${dry}" == true ]]; then
       mac_ops_log_info "[DRY_RUN] Will permanently delete: ${trash_path} (${size_bytes} bytes, expired ${expires_at}, ${#path_key_list[@]} records)"
       purged_bytes=$((purged_bytes + size_bytes))
@@ -1965,9 +2137,8 @@ mac_ops_trash_expire() {
       continue
     fi
 
-    # Permanently delete trash file (guard: must be inside MAC_OPS_TRASH_DIR)
-    if [[ -n "${trash_path}" && "${trash_path}" == "${MAC_OPS_TRASH_DIR}/"* ]] \
-      && [[ -e "${trash_path}" || -L "${trash_path}" ]]; then
+    # Permanently delete trash file
+    if [[ -e "${trash_path}" || -L "${trash_path}" ]]; then
       rm -rf -- "${trash_path}" 2>/dev/null || true
       if [[ -e "${trash_path}" || -L "${trash_path}" ]]; then
         # Keep the index records: dropping them would leave the item on disk
@@ -1983,9 +2154,11 @@ mac_ops_trash_expire() {
     deleted_count=$((deleted_count + 1))
   done
 
-  # Remove expired entries from index
+  # Remove expired entries from index (and persist re-stamped records)
   if [[ ${#remove_keys[@]} -gt 0 ]]; then
     _mac_ops_index_forget "${remove_keys[@]}"
+  fi
+  if [[ ${#remove_keys[@]} -gt 0 || ${restamped} -gt 0 ]]; then
     mac_ops_index_write || true
   fi
 
@@ -2033,10 +2206,9 @@ mac_ops_trash_restore() {
     return 1
   fi
 
-  # Convert to absolute path (handle directly as path may not exist)
-  if [[ "${original_path}" != /* ]]; then
-    original_path="${PWD}/${original_path}"
-  fi
+  # Convert to an absolute, lexically normalized path (it may not exist):
+  # the index stores normalized original paths
+  original_path="${original_path:a}"
 
   # Search index by sha256 prefix of original path
   local path_hash
@@ -2083,12 +2255,28 @@ mac_ops_trash_restore() {
 # lock and has loaded the index. Refuses when the destination exists.
 # Usage: _mac_ops_trash_restore_key_locked <key> [original_path]
 # REPLY: restored | dry-run | missing (no longer in the trash) | exists
-#        (destination exists, refused) | failed. Returns 0 for restored/dry-run.
+#        (destination exists, refused) | unsafe (the original path or the
+#        trash path is not safe to act on, refused) | failed.
+#        Returns 0 for restored/dry-run.
+# The original path comes from the on-disk index and is not trusted: it must
+# pass _mac_ops_trash_restore_target_ok, and the trash path must resolve
+# inside the trash, before any directory is created or anything is moved.
 # -----------------------------------------------------------------------------
 _mac_ops_trash_restore_key_locked() {
   local found_key="${1}"
   local original_path="${2:-${_MAC_OPS_IDX_ORIG[${1}]}}"
   local trash_path="${_MAC_OPS_IDX_TRASH[${found_key}]}"
+
+  if ! _mac_ops_trash_restore_target_ok "${original_path}"; then
+    mac_ops_log_error "Restore refused, unsafe original path (${REPLY}): ${original_path}"
+    REPLY="unsafe"
+    return 1
+  fi
+  if [[ -n "${trash_path}" ]] && ! _mac_ops_trash_path_physical_ok "${trash_path}"; then
+    mac_ops_log_error "Restore refused, trash path does not resolve inside ${MAC_OPS_TRASH_DIR}: ${trash_path}"
+    REPLY="unsafe"
+    return 1
+  fi
 
   if [[ -z "${trash_path}" ]] || [[ ! -e "${trash_path}" && ! -L "${trash_path}" ]]; then
     mac_ops_log_error "Trash file does not exist: ${trash_path}"
