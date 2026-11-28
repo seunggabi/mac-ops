@@ -771,48 +771,6 @@ _mac_ops_index_forget() {
   return 0
 }
 
-# -----------------------------------------------------------------------------
-# Remove an entry from the JSON index by key
-# Usage: mac_ops_index_remove <key>
-# -----------------------------------------------------------------------------
-mac_ops_index_remove() {
-  local key="${1}"
-
-  if ! _mac_ops_index_lock; then
-    mac_ops_log_error "Index entry not removed (lock unavailable): ${key}"
-    return 1
-  fi
-
-  _mac_ops_index_load_locked
-  _mac_ops_index_forget "${key}"
-
-  local rc=0
-  if ! mac_ops_index_write; then
-    rc=1
-  fi
-
-  _mac_ops_index_unlock
-  return ${rc}
-}
-
-# -----------------------------------------------------------------------------
-# Get an entry from the JSON index by key
-# Loads index and returns 0 if found (data available in global arrays),
-# returns 1 if not found
-# Usage: mac_ops_index_get <key>
-# -----------------------------------------------------------------------------
-mac_ops_index_get() {
-  local key="${1}"
-
-  mac_ops_index_read
-
-  if [[ -z "${_MAC_OPS_IDX_ORIG[${key}]+_}" ]]; then
-    return 1
-  fi
-
-  return 0
-}
-
 # =============================================================================
 # Backward compatibility: migrate old .plist metadata to JSON index
 # Usage: _mac_ops_migrate_plist_to_index <memory|write>
