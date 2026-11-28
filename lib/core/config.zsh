@@ -199,29 +199,35 @@ mac_ops_load_config() {
     have_file=true
   fi
 
-  local entry name key def type rest raw val src
+  local entry name key def type rest raw val src invalid
   for entry in "${MAC_OPS_SETTINGS[@]}"; do
     name="${entry%%|*}"; rest="${entry#*|}"
     key="${rest%%|*}"; rest="${rest#*|}"
     def="${rest%%|*}"; type="${rest#*|}"
 
-    val="" src=""
+    # Precedence: valid environment value, then valid config file value,
+    # then the built-in default. An invalid value warns and falls through.
+    val="" src="" invalid=false
     if [[ -n "${_MAC_OPS_ENV_SETTINGS[${name}]+_}" ]]; then
       raw="${_MAC_OPS_ENV_SETTINGS[${name}]}"
       if val=$(_mac_ops_setting_validate "${type}" "${raw}"); then
         src="env"
       else
-        _mac_ops_config_log "WARN" "Invalid value '${raw}' for ${name} (environment, expected ${type}); using default '${def}'"
-        val=""
+        _mac_ops_config_log "WARN" "Invalid value '${raw}' for ${name} (environment, expected ${type}); ignoring it"
+        val="" invalid=true
       fi
-    elif [[ "${have_file}" == "true" ]] \
+    fi
+    if [[ -z "${src}" && "${have_file}" == "true" ]] \
       && raw=$(plutil -extract "${key}" raw -o - "${MAC_OPS_CONFIG_FILE}" 2>/dev/null); then
       if val=$(_mac_ops_setting_validate "${type}" "${raw}"); then
         src="file"
       else
-        _mac_ops_config_log "WARN" "Invalid value '${raw}' for ${key} in ${MAC_OPS_CONFIG_FILE} (expected ${type}); using default '${def}'"
-        val=""
+        _mac_ops_config_log "WARN" "Invalid value '${raw}' for ${key} in ${MAC_OPS_CONFIG_FILE} (expected ${type}); ignoring it"
+        val="" invalid=true
       fi
+    fi
+    if [[ -z "${src}" && "${invalid}" == "true" ]]; then
+      _mac_ops_config_log "WARN" "${name}: no valid value set, using default '${def}'"
     fi
 
     if [[ -z "${src}" ]]; then

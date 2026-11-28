@@ -283,6 +283,26 @@ assert_output_contains "${out}" "[WARN] Invalid value 'kill' for MAC_OPS_ORPHAN_
 assert_output_contains "${out}" "[WARN] Invalid value 'maybe' for DryRun" "non-boolean is warned"
 
 print ""
+print "[TEST] settings_invalid_env_falls_through"
+
+# An invalid environment value must not skip config.plist (garbage
+# MAC_OPS_DRY_RUN with DryRun=true in the file used to give a real run)
+reset_fixture
+plutil -create xml1 "${CFG}"
+plutil -insert DryRun -bool true "${CFG}"
+plutil -insert TrashRetentionHours -string "soon" "${CFG}"
+out=$(fx_zsh MAC_OPS_DRY_RUN=garbage MAC_OPS_TRASH_RETENTION_HOURS=bad MAC_OPS_ORPHAN_ACTION=kill -- '
+    mac_ops_load_config
+    print "dry=${MAC_OPS_DRY_RUN}/${MAC_OPS_SETTING_SOURCE[MAC_OPS_DRY_RUN]} ret=${MAC_OPS_TRASH_RETENTION_HOURS}/${MAC_OPS_SETTING_SOURCE[MAC_OPS_TRASH_RETENTION_HOURS]} orphan=${MAC_OPS_ORPHAN_ACTION}/${MAC_OPS_SETTING_SOURCE[MAC_OPS_ORPHAN_ACTION]}"' 2>&1)
+assert_output_contains "${out}" "dry=true/file" "invalid env value falls through to the config file value (DryRun)"
+assert_output_contains "${out}" "ret=72/default" "invalid env and invalid file value give the default"
+assert_output_contains "${out}" "orphan=report/default" "invalid env value without a file value gives the default"
+assert_output_contains "${out}" "[WARN] Invalid value 'garbage' for MAC_OPS_DRY_RUN" "invalid env value is warned"
+assert_output_contains "${out}" "[WARN] Invalid value 'soon' for TrashRetentionHours" "invalid file value after an invalid env value is warned"
+assert_output_contains "${out}" "MAC_OPS_TRASH_RETENTION_HOURS: no valid value set, using default '72'" "fallback to the default is warned"
+assert_output_not_contains "${out}" "MAC_OPS_DRY_RUN: no valid value set" "no default warning when the file value is used"
+
+print ""
 print "[TEST] config_lists_every_setting"
 
 reset_fixture
