@@ -1337,6 +1337,41 @@ test_restore_destination_race() {
     rm -rf -- "${base}"
 }
 
+# Trash index: names with a newline, a tab, a control char or a quote
+# survive move + index read and restore; a literal backslash sequence
+# survives escape + extract (one-pass unescape)
+test_index_control_char_names() {
+    _t5_reset_trash
+    local base="${HOME}/b10names" n k found rc
+    rm -rf -- "${base}"; mkdir -p "${base}"
+    local -a names=($'nl\nname.txt' $'tab\tname.txt' $'bell\x01name.txt' 'q"uote.txt' 'plain.txt')
+    for n in "${names[@]}"; do
+        print -r -- "content ${n}" > "${base}/${n}"
+        mac_ops_trash_move "${base}/${n}" "test" "mod-a" >/dev/null 2>&1
+    done
+    assert_eq "$(grep -c '^[[:space:]]*"[0-9a-f_]*": {' "${MAC_OPS_INDEX_FILE}" 2>/dev/null)" "${#names}" "index: one entry per moved name, line format intact"
+    mac_ops_index_read >/dev/null 2>&1
+    for n in "${names[@]}"; do
+        found=""
+        for k in "${(@k)_MAC_OPS_IDX_ORIG}"; do
+            [[ "${_MAC_OPS_IDX_ORIG[$k]}" == "${base}/${n}" ]] && found="${_MAC_OPS_IDX_TRASH[$k]}"
+        done
+        assert_eq "$([[ -n "${found}" ]] && cat -- "${found}")" "content ${n}" "index round-trip: ${(q)n}"
+    done
+    for n in "${names[@]}"; do
+        rc=0; mac_ops_trash_restore "${base}/${n}" >/dev/null 2>&1 || rc=$?
+        assert_eq "${rc}/$(cat -- "${base}/${n}" 2>/dev/null)" "0/content ${n}" "restore by name: ${(q)n}"
+    done
+    # Escape/unescape is one pass: a literal backslash sequence stays literal
+    local v
+    for v in 'back\nslash\t"q"\u0041' $'mix\\\n\t\x7f' '\\' 'end\'; do
+        _mac_ops_json_escape_line "${v}"
+        _mac_ops_json_extract_string "\"k\": \"${REPLY}\","
+        assert_eq "${REPLY}" "${v}" "json escape/extract round-trip: ${(q)v}"
+    done
+    rm -rf -- "${base}"
+}
+
 # bin/mac-ops status (read-only, under ERR_EXIT): alert on the first line
 test_status_cli_alert() {
     reset_fixture
@@ -1353,6 +1388,7 @@ test_status_cli_alert() {
 
 test_run_restore_nested_order
 test_restore_destination_race
+test_index_control_char_names
 test_status_cli_alert
 
 # --- Teardown ---

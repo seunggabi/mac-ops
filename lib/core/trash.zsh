@@ -203,7 +203,7 @@ _mac_ops_json_escape() {
 # -----------------------------------------------------------------------------
 # Escape a string for JSON including control characters (newline, tab, ...),
 # so the result is always one valid line. Result in REPLY.
-# Used for the run manifest; the index keeps _mac_ops_json_escape.
+# Used for the run manifest and the trash index (both are line-based).
 # -----------------------------------------------------------------------------
 _mac_ops_json_escape_line() {
   _mac_ops_json_escape "${1}"
@@ -267,9 +267,37 @@ _mac_ops_json_extract_string() {
   # shellcheck disable=SC2076
   if [[ "${line}" =~ ':[[:space:]]*"(.*)"' ]]; then
     local val="${match[1]}"
-    # Unescape
-    val="${val//\\\\/\\}"
-    val="${val//\\\"/\"}"
+    # Unescape in one pass (\\n stays backslash + n): \\ \" \/ \n \r \t \uXXXX
+    if [[ "${val}" == *\\* ]]; then
+      local out="" c h
+      local -i i n=${#val}
+      for (( i = 1; i <= n; i++ )); do
+        c="${val[i]}"
+        if [[ "${c}" == "\\" && i -lt n ]]; then
+          i+=1
+          c="${val[i]}"
+          case "${c}" in
+            n) out+=$'\n' ;;
+            r) out+=$'\r' ;;
+            t) out+=$'\t' ;;
+            u)
+              h="${val[i+1,i+4]}"
+              if [[ "${h}" =~ ^[0-9a-fA-F]{4}$ ]]; then
+                printf -v c "\\u${h}"
+                out+="${c}"
+                i+=4
+              else
+                out+="\\u"
+              fi
+              ;;
+            *) out+="${c}" ;;
+          esac
+        else
+          out+="${c}"
+        fi
+      done
+      val="${out}"
+    fi
     REPLY="${val}"
   fi
   return 0
@@ -484,10 +512,10 @@ mac_ops_index_write() {
       else
         printf ','
       fi
-      _mac_ops_json_escape "${_MAC_OPS_IDX_ORIG[${key}]}"; esc_orig="${REPLY}"
-      _mac_ops_json_escape "${_MAC_OPS_IDX_TRASH[${key}]}"; esc_trash="${REPLY}"
-      _mac_ops_json_escape "${_MAC_OPS_IDX_REASON[${key}]}"; esc_reason="${REPLY}"
-      _mac_ops_json_escape "${_MAC_OPS_IDX_MODULE[${key}]}"; esc_module="${REPLY}"
+      _mac_ops_json_escape_line "${_MAC_OPS_IDX_ORIG[${key}]}"; esc_orig="${REPLY}"
+      _mac_ops_json_escape_line "${_MAC_OPS_IDX_TRASH[${key}]}"; esc_trash="${REPLY}"
+      _mac_ops_json_escape_line "${_MAC_OPS_IDX_REASON[${key}]}"; esc_reason="${REPLY}"
+      _mac_ops_json_escape_line "${_MAC_OPS_IDX_MODULE[${key}]}"; esc_module="${REPLY}"
       printf '\n    "%s": {\n' "${key}"
       printf '      "original_path": "%s",\n' "${esc_orig}"
       printf '      "trash_path": "%s",\n' "${esc_trash}"
@@ -496,15 +524,15 @@ mac_ops_index_write() {
       printf '      "timestamp": "%s",\n' "${_MAC_OPS_IDX_TIME[${key}]}"
       printf '      "size_bytes": %s,\n' "${_MAC_OPS_IDX_SIZE[${key}]:-0}"
       if [[ -n "${_MAC_OPS_IDX_SOURCE[${key}]}" ]]; then
-        _mac_ops_json_escape "${_MAC_OPS_IDX_SOURCE[${key}]}"
+        _mac_ops_json_escape_line "${_MAC_OPS_IDX_SOURCE[${key}]}"
         printf '      "source": "%s",\n' "${REPLY}"
       fi
       if [[ -n "${_MAC_OPS_IDX_ORIGTIME[${key}]}" ]]; then
-        _mac_ops_json_escape "${_MAC_OPS_IDX_ORIGTIME[${key}]}"
+        _mac_ops_json_escape_line "${_MAC_OPS_IDX_ORIGTIME[${key}]}"
         printf '      "original_time": "%s",\n' "${REPLY}"
       fi
       if [[ -n "${_MAC_OPS_IDX_RUNID[${key}]}" ]]; then
-        _mac_ops_json_escape "${_MAC_OPS_IDX_RUNID[${key}]}"
+        _mac_ops_json_escape_line "${_MAC_OPS_IDX_RUNID[${key}]}"
         printf '      "run_id": "%s",\n' "${REPLY}"
       fi
       printf '      "expire_after": "%s"\n' "${_MAC_OPS_IDX_EXPIRE[${key}]}"
