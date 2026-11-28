@@ -5,8 +5,8 @@
 # entries that were modified (or hold a file modified) within the grace period
 #
 # Settings and data are not cache: an orphan in a data-bearing location
-# (Application Support, Preferences, Containers) is only reported unless the
-# user opts in with MAC_OPS_ORPHAN_APP_DATA_ACTION=trash.
+# (Application Support, Preferences, Containers, HTTPStorages) is only reported
+# unless the user opts in with MAC_OPS_ORPHAN_APP_DATA_ACTION=trash.
 # =============================================================================
 
 # --- Default settings ---
@@ -15,15 +15,16 @@ MAC_OPS_ORPHAN_APP_GRACE_DAYS=${MAC_OPS_ORPHAN_APP_GRACE_DAYS:-7}
 # What to do with an orphan found in a settings/data location:
 #   report (default) - log it with its size and the checks it passed, move nothing
 #   trash            - move it to the mac-ops trash like a cache orphan
-# Any other value behaves like "report".
+# Only the exact value "trash" moves anything. Every other value, including an
+# empty one, "Trash" or "trash " with a trailing space, behaves like "report".
 MAC_OPS_ORPHAN_APP_DATA_ACTION=${MAC_OPS_ORPHAN_APP_DATA_ACTION:-report}
 
 # --- Cache-like locations (matched by directory name) ---
 # An orphan here can be rebuilt by its app, so it is moved to the trash.
 # Every scan location that is NOT listed here is treated as settings/data.
+# HTTPStorages is deliberately absent: it holds cookies (logins), not cache.
 _MAC_OPS_ORPHAN_APP_CACHE_DIR_NAMES=(
   "Caches"
-  "HTTPStorages"
   "Saved Application State"
   "WebKit"
 )
@@ -207,6 +208,44 @@ _mac_ops_is_bundle_id_name() {
 }
 
 # -----------------------------------------------------------------------------
+# Internal: Print the vendor of a bundle ID: its first two labels, lowercased
+# (com.garmin.renu.service -> com.garmin). Prints nothing for a name with fewer
+# than two non-empty labels.
+# Usage: _mac_ops_orphan_app_vendor <bundle_id>
+# -----------------------------------------------------------------------------
+_mac_ops_orphan_app_vendor() {
+  local id="${1}"
+  [[ "${id}" == *.* ]] || return 0
+  local first="${id%%.*}"
+  local rest="${id#*.}"
+  local second="${rest%%.*}"
+  [[ -n "${first}" && -n "${second}" ]] || return 0
+  print -r -- "${(L)first}.${(L)second}"
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Build _MAC_OPS_INSTALLED_VENDORS from _MAC_OPS_INSTALLED_BUNDLES.
+# An entry that shares its vendor with any installed bundle ID is protected:
+# helpers, login items and services of an installed app often use bundle IDs
+# that no detection source reports (com.garmin.renu.service next to the
+# installed com.garmin.renu.client).
+# Usage: _mac_ops_orphan_app_build_vendor_index
+# -----------------------------------------------------------------------------
+_mac_ops_orphan_app_build_vendor_index() {
+  typeset -gA _MAC_OPS_INSTALLED_VENDORS
+  _MAC_OPS_INSTALLED_VENDORS=()
+  local id first rest second
+  for id in "${(@k)_MAC_OPS_INSTALLED_BUNDLES}"; do
+    [[ "${id}" == *.* ]] || continue
+    first="${id%%.*}"
+    rest="${id#*.}"
+    second="${rest%%.*}"
+    [[ -n "${first}" && -n "${second}" ]] || continue
+    _MAC_OPS_INSTALLED_VENDORS[${(L)first}.${(L)second}]=1
+  done
+}
+
+# -----------------------------------------------------------------------------
 # Orphan app data cleanup main function
 # 1. Extract bundle IDs of installed apps from /Applications, ~/Applications,
 #    Spotlight (mdfind), Homebrew Cask, and LaunchDaemons/Agents
@@ -221,6 +260,7 @@ mac_ops_orphan_app_cleanup() {
   typeset -gA _MAC_OPS_INSTALLED_BUNDLES
   _MAC_OPS_INSTALLED_BUNDLES=()
   typeset -g _MAC_OPS_ORPHAN_APP_MDFIND_APPS=0
+  typeset -g _MAC_OPS_ORPHAN_APP_PATHSCAN_APPS=0
   _mac_ops_collect_installed_bundles
 
   local bundle_count=${#_MAC_OPS_INSTALLED_BUNDLES[@]}
@@ -233,13 +273,20 @@ mac_ops_orphan_app_cleanup() {
 
   # "Installed" must not rest on one signal. Spotlight is the only source that
   # sees apps outside the standard directories (JetBrains Toolbox, Setapp,
-  # custom paths). When it returns no application at all, its index is broken
-  # or disabled and an installed app can look like an orphan, so nothing is
-  # moved in this run.
+  # custom paths). When its index is disabled, empty or only partly built, an
+  # installed app can look like an orphan, so nothing is moved in this run.
   typeset -g _MAC_OPS_ORPHAN_APP_REPORT_ONLY=false
+  local spotlight_problem=""
   if [[ ${_MAC_OPS_ORPHAN_APP_MDFIND_APPS} -eq 0 ]]; then
+    spotlight_problem="Spotlight (mdfind) returned no applications"
+  elif ! mdutil -s / 2>/dev/null | grep -q "Indexing enabled"; then
+    spotlight_problem="Spotlight indexing is not reported as enabled for / (mdutil -s /)"
+  elif (( _MAC_OPS_ORPHAN_APP_MDFIND_APPS * 2 < _MAC_OPS_ORPHAN_APP_PATHSCAN_APPS )); then
+    spotlight_problem="Spotlight (mdfind) found ${_MAC_OPS_ORPHAN_APP_MDFIND_APPS} app bundle IDs, less than half of the ${_MAC_OPS_ORPHAN_APP_PATHSCAN_APPS} found in the app directories (index incomplete)"
+  fi
+  if [[ -n "${spotlight_problem}" ]]; then
     _MAC_OPS_ORPHAN_APP_REPORT_ONLY=true
-    mac_ops_log_warn "Orphan app cleanup: Spotlight (mdfind) returned no applications, installed-app detection is incomplete. This run is report-only, nothing will be moved."
+    mac_ops_log_warn "Orphan app cleanup: ${spotlight_problem}, installed-app detection is incomplete. This run is report-only, nothing will be moved."
   fi
 
   # Stage 1.5: Collect running app bundle IDs for additional protection
@@ -272,9 +319,59 @@ mac_ops_orphan_app_cleanup() {
   unset _MAC_OPS_RUNNING_BUNDLES
   unset _MAC_OPS_ORPHAN_APP_REPORT_ONLY
   unset _MAC_OPS_ORPHAN_APP_MDFIND_APPS
+  unset _MAC_OPS_ORPHAN_APP_PATHSCAN_APPS
+  unset _MAC_OPS_INSTALLED_VENDORS
 
   mac_ops_log_info "Orphan app data cleanup completed"
   return 0
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Print the CFBundleIdentifier of a bundle (.app, .xpc, .appex).
+# Prints nothing if the bundle has no readable Info.plist or no identifier.
+# Usage: _mac_ops_orphan_app_read_bundle_id <bundle_path>
+# -----------------------------------------------------------------------------
+_mac_ops_orphan_app_read_bundle_id() {
+  setopt LOCAL_OPTIONS NO_ERR_EXIT
+  local info_plist="${1}/Contents/Info.plist"
+  [[ -f "${info_plist}" ]] || info_plist="${1}/Info.plist"
+  [[ -f "${info_plist}" ]] || return 0
+  /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "${info_plist}" 2>/dev/null || true
+}
+
+# How deep below <app>/Contents nested bundles are searched for. Depth 6 covers
+# Contents/Frameworks/X.framework/Versions/A/Helpers/Y.app.
+typeset -g _MAC_OPS_ORPHAN_APP_NESTED_DEPTH=6
+
+# -----------------------------------------------------------------------------
+# Internal: Collect the bundle IDs of bundles nested inside an installed app:
+# login items (Contents/Library/LoginItems/*.app), helpers (Contents/Helpers),
+# Electron helpers (Contents/Frameworks/*.app), XPC services
+# (Contents/XPCServices/*.xpc), extensions (Contents/PlugIns/*.appex) and any
+# other .app/.xpc/.appex within _MAC_OPS_ORPHAN_APP_NESTED_DEPTH levels.
+# These bundles keep their own data under ~/Library and are not reported by
+# Spotlight or by the shallow scan of the app directories.
+# Sets REPLY to the number of new IDs added (no output, so the caller must not
+# run it in a command substitution, which would lose the additions).
+# Usage: _mac_ops_collect_nested_bundles <app_path>
+# -----------------------------------------------------------------------------
+_mac_ops_collect_nested_bundles() {
+  setopt LOCAL_OPTIONS NO_ERR_EXIT
+  local app_path="${1}"
+  local added=0
+  local nested_path nested_id
+  REPLY=0
+  [[ -d "${app_path}/Contents" ]] || return 0
+  while IFS= read -r nested_path; do
+    nested_id=$(_mac_ops_orphan_app_read_bundle_id "${nested_path}")
+    if [[ -n "${nested_id}" && -z "${_MAC_OPS_INSTALLED_BUNDLES[${nested_id}]+_}" ]]; then
+      _MAC_OPS_INSTALLED_BUNDLES[${nested_id}]=1
+      added=$(( added + 1 ))
+      mac_ops_log_debug "Bundle ID collected (nested in ${app_path:t}): ${nested_id}"
+    fi
+  done < <(find "${app_path}/Contents" -maxdepth "${_MAC_OPS_ORPHAN_APP_NESTED_DEPTH}" \
+    \( -name "*.app" -o -name "*.xpc" -o -name "*.appex" \) -type d 2>/dev/null)
+  REPLY=${added}
 }
 
 # -----------------------------------------------------------------------------
@@ -283,51 +380,61 @@ mac_ops_orphan_app_cleanup() {
 # Stage B: mdfind (Spotlight) — JetBrains Toolbox, Whale, Setapp, mas, custom paths
 # Stage C: Homebrew Cask — /opt/homebrew/Caskroom (NOT indexed by Spotlight)
 # Stage D: LaunchDaemons/LaunchAgents — services like Korean banking security software
+# Stage E: bundles nested inside every app found in A-C (login items, helpers,
+#          XPC services, extensions)
+# Sets _MAC_OPS_ORPHAN_APP_PATHSCAN_APPS (distinct IDs from Stage A) and
+# _MAC_OPS_ORPHAN_APP_MDFIND_APPS (distinct IDs Spotlight returned).
 # -----------------------------------------------------------------------------
 _mac_ops_collect_installed_bundles() {
   # Prevent ERR_EXIT from aborting the scan mid-way (PlistBuddy exits 1 even on success)
   setopt LOCAL_OPTIONS NO_ERR_EXIT
 
-  local info_plist=""
   local bundle_id=""
+  # Top-level app bundles found by stages A-C, scanned for nested bundles in E
+  local -A top_level_apps
+  top_level_apps=()
 
   # Stage A: scan standard app directories (fast, covers most cases)
   local app_dirs=("/Applications" "${HOME}/Applications" "/System/Applications")
   local app_base app_path
+  local -A pathscan_ids
+  pathscan_ids=()
   for app_base in "${app_dirs[@]}"; do
     [[ ! -d "${app_base}" ]] && continue
     while IFS= read -r app_path; do
       [[ ! -d "${app_path}" ]] && continue
-      info_plist="${app_path}/Contents/Info.plist"
-      [[ ! -f "${info_plist}" ]] && continue
-      bundle_id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "${info_plist}" 2>/dev/null || true)
+      bundle_id=$(_mac_ops_orphan_app_read_bundle_id "${app_path}")
       if [[ -n "${bundle_id}" ]]; then
         _MAC_OPS_INSTALLED_BUNDLES[${bundle_id}]=1
+        pathscan_ids[${bundle_id}]=1
+        [[ "${app_path}" != *.app/* ]] && top_level_apps[${app_path}]=1
         mac_ops_log_debug "Bundle ID collected (path): ${bundle_id}"
       fi
     done < <(find "${app_base}" -maxdepth 3 -name "*.app" -type d 2>/dev/null)
   done
+  _MAC_OPS_ORPHAN_APP_PATHSCAN_APPS=${#pathscan_ids[@]}
 
   # Stage B: mdfind — catches ALL Spotlight-indexed apps regardless of install location
   # (JetBrains Toolbox, Whale, Setapp, mas, custom paths, etc.)
   local mdfind_count=0
+  local -A mdfind_ids
+  mdfind_ids=()
   while IFS= read -r app_path; do
     [[ ! -d "${app_path}" ]] && continue
-    info_plist="${app_path}/Contents/Info.plist"
-    [[ ! -f "${info_plist}" ]] && continue
-    bundle_id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "${info_plist}" 2>/dev/null || true)
-    # Count every application Spotlight returned, including the ones Stage A
-    # already found: zero means Spotlight itself is not working.
-    if [[ -n "${bundle_id}" ]]; then
-      _MAC_OPS_ORPHAN_APP_MDFIND_APPS=$(( ${_MAC_OPS_ORPHAN_APP_MDFIND_APPS:-0} + 1 ))
-    fi
-    if [[ -n "${bundle_id}" && -z "${_MAC_OPS_INSTALLED_BUNDLES[${bundle_id}]+_}" ]]; then
+    bundle_id=$(_mac_ops_orphan_app_read_bundle_id "${app_path}")
+    [[ -z "${bundle_id}" ]] && continue
+    # Count every distinct ID Spotlight returned, including the ones Stage A
+    # already found: the count is compared with Stage A to judge the index.
+    mdfind_ids[${bundle_id}]=1
+    [[ "${app_path}" != *.app/* ]] && top_level_apps[${app_path}]=1
+    if [[ -z "${_MAC_OPS_INSTALLED_BUNDLES[${bundle_id}]+_}" ]]; then
       _MAC_OPS_INSTALLED_BUNDLES[${bundle_id}]=1
       mdfind_count=$(( mdfind_count + 1 ))
       mac_ops_log_debug "Bundle ID collected (mdfind): ${bundle_id}"
     fi
   done < <(mdfind "kMDItemContentTypeTree == 'com.apple.application-bundle'" 2>/dev/null)
-  mac_ops_log_debug "mdfind added ${mdfind_count} additional bundle IDs"
+  _MAC_OPS_ORPHAN_APP_MDFIND_APPS=${#mdfind_ids[@]}
+  mac_ops_log_debug "mdfind added ${mdfind_count} additional bundle IDs (${_MAC_OPS_ORPHAN_APP_MDFIND_APPS} distinct, path scan ${_MAC_OPS_ORPHAN_APP_PATHSCAN_APPS})"
 
   # Stage C: Homebrew Cask — apps installed via brew are NOT indexed by Spotlight
   # Covers: Arc, Warp, TablePlus, Proxyman, Raycast installed via brew cask, etc.
@@ -337,10 +444,10 @@ _mac_ops_collect_installed_bundles() {
     [[ ! -d "${cask_base}" ]] && continue
     while IFS= read -r app_path; do
       [[ ! -d "${app_path}" ]] && continue
-      info_plist="${app_path}/Contents/Info.plist"
-      [[ ! -f "${info_plist}" ]] && continue
-      bundle_id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "${info_plist}" 2>/dev/null || true)
-      if [[ -n "${bundle_id}" && -z "${_MAC_OPS_INSTALLED_BUNDLES[${bundle_id}]+_}" ]]; then
+      bundle_id=$(_mac_ops_orphan_app_read_bundle_id "${app_path}")
+      [[ -z "${bundle_id}" ]] && continue
+      [[ "${app_path}" != *.app/* ]] && top_level_apps[${app_path}]=1
+      if [[ -z "${_MAC_OPS_INSTALLED_BUNDLES[${bundle_id}]+_}" ]]; then
         _MAC_OPS_INSTALLED_BUNDLES[${bundle_id}]=1
         brew_cask_count=$(( brew_cask_count + 1 ))
         mac_ops_log_debug "Bundle ID collected (brew-cask): ${bundle_id}"
@@ -368,6 +475,16 @@ _mac_ops_collect_installed_bundles() {
     done < <(find "${launch_dir}" -maxdepth 1 -name "*.plist" -type f 2>/dev/null)
   done
   mac_ops_log_debug "LaunchDaemons/Agents added ${launch_count} additional bundle IDs"
+
+  # Stage E: bundles nested inside installed apps. Apple's own apps are skipped:
+  # their data is com.apple.* and never scanned.
+  local nested_count=0 REPLY
+  for app_path in "${(@k)top_level_apps}"; do
+    [[ "${app_path}" == /System/* ]] && continue
+    _mac_ops_collect_nested_bundles "${app_path}"
+    nested_count=$(( nested_count + ${REPLY:-0} ))
+  done
+  mac_ops_log_debug "Nested bundles added ${nested_count} additional bundle IDs"
 }
 
 # -----------------------------------------------------------------------------
@@ -407,11 +524,16 @@ _mac_ops_orphan_app_prepare_cutoff() {
 # Internal: Check that nothing inside an entry was modified after the cutoff
 # The modification time of a directory does not change when a file deep inside
 # it changes, so an old directory can still hold a profile that is in use.
+# The search is bounded to _MAC_OPS_ORPHAN_APP_RECENT_DEPTH levels so a large
+# old tree is not walked in full; a recent file deeper than that is not seen,
+# and the log line of every orphan says so.
 # Returns 0 only when the search ran successfully and found no recent file.
-# A failed search (unreadable subdirectory, unsupported option) returns 1, so
-# the caller leaves the entry alone.
+# A failed search (unreadable subdirectory, unsupported option) or a missing
+# cutoff timestamp returns 1, so the caller leaves the entry alone.
 # Usage: _mac_ops_orphan_app_has_no_recent_file <path>
 # -----------------------------------------------------------------------------
+typeset -g _MAC_OPS_ORPHAN_APP_RECENT_DEPTH=6
+
 _mac_ops_orphan_app_has_no_recent_file() {
   setopt LOCAL_OPTIONS NO_ERR_EXIT
 
@@ -419,7 +541,14 @@ _mac_ops_orphan_app_has_no_recent_file() {
   local find_output
   local find_status=0
 
-  find_output=$(find "${target_path}" -type f -newermt "${_MAC_OPS_ORPHAN_APP_CUTOFF_STAMP}" -print -quit 2>&1) || find_status=$?
+  # find -newermt "" succeeds and compares against an arbitrary time, which
+  # would read as "no recent file"
+  if [[ -z "${_MAC_OPS_ORPHAN_APP_CUTOFF_STAMP}" ]]; then
+    mac_ops_log_warn "Orphan check inconclusive, left untouched: ${target_path} (no grace period cutoff timestamp)"
+    return 1
+  fi
+
+  find_output=$(find "${target_path}" -maxdepth "${_MAC_OPS_ORPHAN_APP_RECENT_DEPTH}" -type f -newermt "${_MAC_OPS_ORPHAN_APP_CUTOFF_STAMP}" -print -quit 2>&1) || find_status=$?
 
   if [[ ${find_status} -ne 0 ]]; then
     mac_ops_log_warn "Orphan check inconclusive, left untouched: ${target_path} (recent-file search failed with exit ${find_status}: ${find_output%%$'\n'*})"
@@ -463,6 +592,12 @@ _mac_ops_orphan_app_process_entry() {
   # Bundle ID pattern matching (com.xxx.xxx or org.xxx.xxx, etc.)
   # Reverse domain format with at least 2 dots (.)
   if ! _mac_ops_is_bundle_id_name "${item_name}"; then
+    return 0
+  fi
+
+  # A symbolic link's own age says nothing about the data it points to
+  if [[ -L "${item}" ]]; then
+    mac_ops_log_debug "Symbolic link, skipped: ${item}"
     return 0
   fi
 
@@ -514,6 +649,15 @@ _mac_ops_orphan_app_process_entry() {
     fi
   done
 
+  # Skip if an installed bundle ID has the same vendor (first two labels):
+  # an installed app's helpers and services are not always detected
+  local _vendor
+  _vendor=$(_mac_ops_orphan_app_vendor "${item_name}")
+  if [[ -n "${_vendor}" && -n "${_MAC_OPS_INSTALLED_VENDORS[${_vendor}]+_}" ]]; then
+    mac_ops_log_debug "Same vendor as an installed app (${_vendor}), protected: ${item_name}"
+    return 0
+  fi
+
   # Skip if app is currently running
   if [[ -n "${_MAC_OPS_RUNNING_BUNDLES[${item_name}]+_}" ]]; then
     mac_ops_log_debug "Running app data protected: ${item_name}"
@@ -551,7 +695,7 @@ _mac_ops_orphan_app_process_entry() {
   item_size=$(mac_ops_get_dir_size "${item}")
   age_days=$(( ($(date +%s) - mtime) / 86400 ))
 
-  mac_ops_log_info "Orphan ${label} found: ${item_name} ($(mac_ops_format_bytes "${item_size}")) in ${scan_dir} - checks passed: not installed, not running, not safelisted, older than ${MAC_OPS_ORPHAN_APP_GRACE_DAYS} days (last modified ${age_days} days ago), no file inside modified since ${_MAC_OPS_ORPHAN_APP_CUTOFF_STAMP}"
+  mac_ops_log_info "Orphan ${label} found: ${item_name} ($(mac_ops_format_bytes "${item_size}")) in ${scan_dir} - checks passed: not installed, not running, not safelisted, older than ${MAC_OPS_ORPHAN_APP_GRACE_DAYS} days (last modified ${age_days} days ago), no file inside modified since ${_MAC_OPS_ORPHAN_APP_CUTOFF_STAMP} (searched ${_MAC_OPS_ORPHAN_APP_RECENT_DEPTH} levels deep, a newer file deeper down would not be seen), no installed app from vendor ${_vendor}"
 
   # Report instead of moving when the run is report-only, or when the entry is
   # settings/data and the user did not opt in to moving it.
@@ -599,6 +743,7 @@ _mac_ops_scan_directory() {
   if ! _mac_ops_orphan_app_prepare_cutoff; then
     return 0
   fi
+  _mac_ops_orphan_app_build_vendor_index
 
   # Iterate only 1st level subitems (bundle ID directories)
   for item in "${scan_dir}"/*(N); do
@@ -633,6 +778,7 @@ _mac_ops_scan_preferences() {
   if ! _mac_ops_orphan_app_prepare_cutoff; then
     return 0
   fi
+  _mac_ops_orphan_app_build_vendor_index
 
   # shellcheck disable=SC1036,SC1058,SC1072,SC1073
   for plist_file in "${pref_dir}"/*.plist(N); do

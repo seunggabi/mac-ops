@@ -201,6 +201,10 @@ MAC_OPS_CACHE_RECENT_DAYS=1 mac-ops run --module=cache
 # Orphan app data settings
 export MAC_OPS_ORPHAN_APP_GRACE_DAYS=7          # Skip entries modified (or holding a file modified) within N days (default: 7)
 export MAC_OPS_ORPHAN_APP_DATA_ACTION=report    # Orphans in settings/data locations: report (default) or trash
+# Settings/data locations: Application Support, Preferences, Containers, HTTPStorages (cookies).
+# Only the exact value "trash" moves them; any other value reports.
+# An entry is never touched when an installed app (or a helper/login item nested inside one)
+# has the same bundle ID vendor, e.g. com.garmin.*, or when it is a symbolic link.
 
 # Example: Preview what opting in to moving orphan settings/data would do
 MAC_OPS_ORPHAN_APP_DATA_ACTION=trash mac-ops run --module=orphan-app --dry-run
