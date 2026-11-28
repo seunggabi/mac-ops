@@ -5,7 +5,7 @@
 # entries that were modified (or hold a file modified) within the grace period
 #
 # Settings and data are not cache: an orphan in a data-bearing location
-# (Application Support, Preferences, Containers, HTTPStorages) is only reported
+# (Application Support, Preferences, Containers, HTTPStorages, WebKit) is only reported
 # unless the user opts in with MAC_OPS_ORPHAN_APP_DATA_ACTION=trash.
 # =============================================================================
 
@@ -22,11 +22,11 @@ MAC_OPS_ORPHAN_APP_DATA_ACTION=${MAC_OPS_ORPHAN_APP_DATA_ACTION:-report}
 # --- Cache-like locations (matched by directory name) ---
 # An orphan here can be rebuilt by its app, so it is moved to the trash.
 # Every scan location that is NOT listed here is treated as settings/data.
-# HTTPStorages is deliberately absent: it holds cookies (logins), not cache.
+# HTTPStorages and WebKit are deliberately absent: HTTPStorages holds cookies
+# (logins) and WebKit holds per-app web storage (local storage, IndexedDB).
 _MAC_OPS_ORPHAN_APP_CACHE_DIR_NAMES=(
   "Caches"
   "Saved Application State"
-  "WebKit"
 )
 
 # --- Scan target paths ---
@@ -292,10 +292,20 @@ mac_ops_orphan_app_cleanup() {
   # Stage 1.5: Collect running app bundle IDs for additional protection
   typeset -gA _MAC_OPS_RUNNING_BUNDLES
   _MAC_OPS_RUNNING_BUNDLES=()
-  local _running_id
+  # When the list cannot be built (lsappinfo missing, failing, or listing no
+  # app at all, which never happens in a GUI session), every entry is treated
+  # as belonging to a running app and skipped.
+  typeset -g _MAC_OPS_ORPHAN_APP_RUNNING_UNKNOWN=false
+  local _running_id _lsapp_out="" _lsapp_rc=0
+  _lsapp_out=$(lsappinfo list 2>/dev/null)
+  _lsapp_rc=$?
   while IFS= read -r _running_id; do
     [[ -n "${_running_id}" ]] && _MAC_OPS_RUNNING_BUNDLES[${_running_id}]=1
-  done < <(lsappinfo list 2>/dev/null | grep 'bundleID=' | sed 's/.*bundleID="\([^"]*\)".*/\1/' | grep -v '^\[' | sort -u)
+  done < <(print -r -- "${_lsapp_out}" | grep 'bundleID=' | sed 's/.*bundleID="\([^"]*\)".*/\1/' | grep -v '^\[' | sort -u)
+  if [[ ${_lsapp_rc} -ne 0 || ${#_MAC_OPS_RUNNING_BUNDLES[@]} -eq 0 ]]; then
+    _MAC_OPS_ORPHAN_APP_RUNNING_UNKNOWN=true
+    mac_ops_log_warn "Orphan app cleanup: running-app list unavailable (lsappinfo failed or listed no app), every entry is treated as in use and skipped"
+  fi
   mac_ops_log_debug "Running apps: ${#_MAC_OPS_RUNNING_BUNDLES[@]} bundles protected"
 
   # Stage 2: Search for orphan data in each scan target path
@@ -317,6 +327,7 @@ mac_ops_orphan_app_cleanup() {
   # Cleanup global variables
   unset _MAC_OPS_INSTALLED_BUNDLES
   unset _MAC_OPS_RUNNING_BUNDLES
+  unset _MAC_OPS_ORPHAN_APP_RUNNING_UNKNOWN
   unset _MAC_OPS_ORPHAN_APP_REPORT_ONLY
   unset _MAC_OPS_ORPHAN_APP_MDFIND_APPS
   unset _MAC_OPS_ORPHAN_APP_PATHSCAN_APPS
@@ -661,6 +672,10 @@ _mac_ops_orphan_app_process_entry() {
   # Skip if app is currently running
   if [[ -n "${_MAC_OPS_RUNNING_BUNDLES[${item_name}]+_}" ]]; then
     mac_ops_log_debug "Running app data protected: ${item_name}"
+    return 0
+  fi
+  if [[ "${_MAC_OPS_ORPHAN_APP_RUNNING_UNKNOWN:-false}" != "false" ]]; then
+    mac_ops_log_debug "Protected, skipped (orphan-app-cleanup): ${item} (reason: running-app list unavailable)"
     return 0
   fi
 

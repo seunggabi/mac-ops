@@ -9,7 +9,7 @@ MAC_OPS_DEV_CACHE_MAX_AGE_DAYS=${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS:-30}
 
 # -----------------------------------------------------------------------------
 # Xcode cache cleanup
-# DerivedData, Archives, CoreSimulator cache
+# DerivedData and CoreSimulator cache; Archives are only reported
 # -----------------------------------------------------------------------------
 _mac_ops_dev_xcode() {
   local xcode_derived="${HOME}/Library/Developer/Xcode/DerivedData"
@@ -36,69 +36,47 @@ _mac_ops_dev_xcode() {
 
   mac_ops_log_info "Cleaning Xcode cache..."
 
-  # Clean all DerivedData
+  local _dev_cutoff="" _dev_sz=0 _dev_cleaned=0
+  _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
+
+  # DerivedData: only items with nothing inside modified or read within
+  # MAC_OPS_DEV_CACHE_MAX_AGE_DAYS (a project opened last week keeps its index).
+  # Dry-run takes the same path, so it lists exactly the items a real run
+  # would move (trash_move only reports in dry-run).
   if [[ -d "${xcode_derived}" ]]; then
-    local derived_size
-    derived_size=$(mac_ops_get_dir_size "${xcode_derived}")
-
-    if [[ ${derived_size} -gt 0 ]]; then
-      # Move all items in DerivedData to trash. Dry-run takes the same path,
-      # so it lists exactly the items a real run would move (trash_move only
-      # reports in dry-run).
-      for item in "${xcode_derived}"/*(N); do
-        [[ ! -e "${item}" ]] && continue
-        _mac_ops_fc_guard "${item}" "dev-cleanup" || continue
-        mac_ops_trash_move "${item}" "Xcode DerivedData cleanup" "dev-cleanup"
-      done
-
-      if [[ "${MAC_OPS_DRY_RUN}" != "true" ]]; then
-        MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + derived_size))
-        MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-        mac_ops_log_info "Xcode DerivedData cleanup completed: $(mac_ops_format_bytes ${derived_size})"
-      fi
-    fi
-  fi
-
-  # Clean Archives older than 90 days
-  if [[ -d "${xcode_archives}" ]]; then
-    local now_epoch
-    local ninety_days_ago
-    local archive_count=0
-    local archive_size=0
-    local archive_time
-    local item_size
-
-    now_epoch=$(date +%s)
-    ninety_days_ago=$((now_epoch - 7776000))  # 90 days = 7776000 seconds
-
-    for archive in "${xcode_archives}"/*(N); do
-      [[ ! -d "${archive}" ]] && continue
-
-      # A failed stat must not read as "older than 90 days"
-      archive_time=$(stat -f%m "${archive}" 2>/dev/null)
-      if [[ ! "${archive_time}" =~ ^[0-9]+$ ]]; then
-        mac_ops_log_debug "Protected, skipped (dev-cleanup): ${archive} (reason: modification time unavailable)"
+    for item in "${xcode_derived}"/*(N); do
+      [[ ! -e "${item}" ]] && continue
+      _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}" || continue
+      if mac_ops_ignore_check_path "${item}"; then
+        mac_ops_log_debug "User ignore (path): ${item}"
         continue
       fi
-      _mac_ops_fc_guard "${archive}" "dev-cleanup" || continue
-
-      if [[ ${archive_time} -lt ${ninety_days_ago} ]]; then
-        item_size=$(mac_ops_get_dir_size "${archive}")
-        archive_size=$((archive_size + item_size))
-        archive_count=$((archive_count + 1))
-
-        if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-          mac_ops_log_info "[DRY_RUN] Will clean: ${archive} ($(mac_ops_format_bytes ${item_size}))"
-        else
-          mac_ops_trash_move "${archive}" "Xcode Archive older than 90 days" "dev-cleanup"
-        fi
+      _dev_sz=$(mac_ops_get_dir_size "${item}")
+      if mac_ops_trash_move "${item}" "Xcode DerivedData cleanup" "dev-cleanup"; then
+        _dev_cleaned=$((_dev_cleaned + _dev_sz))
       fi
     done
 
-    if [[ ${archive_count} -gt 0 && "${MAC_OPS_DRY_RUN}" != "true" ]]; then
-      MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + archive_size))
-      MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + archive_count))
-      mac_ops_log_info "Xcode Archives cleanup completed: ${archive_count} items, $(mac_ops_format_bytes ${archive_size})"
+    if [[ "${MAC_OPS_DRY_RUN}" != "true" && ${_dev_cleaned} -gt 0 ]]; then
+      MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
+      MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
+      mac_ops_log_info "Xcode DerivedData cleanup completed: $(mac_ops_format_bytes ${_dev_cleaned})"
+    fi
+  fi
+
+  # Archives are shipped build products with their dSYMs (needed to
+  # symbolicate crash reports): data, not cache. Reported, never moved.
+  if [[ -d "${xcode_archives}" ]]; then
+    local archive_count=0
+    local archive_size=0
+    local archive=""
+    while IFS= read -r archive; do
+      [[ -z "${archive}" ]] && continue
+      archive_count=$((archive_count + 1))
+      archive_size=$((archive_size + $(mac_ops_get_dir_size "${archive}")))
+    done < <(find "${xcode_archives}" -maxdepth 3 -type d -name '*.xcarchive' -prune 2>/dev/null)
+    if [[ ${archive_count} -gt 0 ]]; then
+      mac_ops_log_info "Xcode Archives: ${archive_count} archives, $(mac_ops_format_bytes ${archive_size}) in ${xcode_archives} (reported only, never moved; delete old ones in Xcode Organizer)"
     fi
   fi
 
@@ -498,20 +476,31 @@ _mac_ops_dev_cocoapods() {
 
   mac_ops_log_info "Cleaning CocoaPods cache..."
 
+  local _dev_cutoff="" _dev_sz=0 _dev_cleaned=0
+  _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
+
+  # Only items with nothing inside used within MAC_OPS_DEV_CACHE_MAX_AGE_DAYS.
   # Dry-run takes the same path, so it lists exactly what a real run would move
   for item in "${pod_cache}"/*(N); do
     [[ ! -e "${item}" ]] && continue
-    _mac_ops_fc_guard "${item}" "dev-cleanup" || continue
-    mac_ops_trash_move "${item}" "CocoaPods cache cleanup" "dev-cleanup"
+    _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}" || continue
+    if mac_ops_ignore_check_path "${item}"; then
+      mac_ops_log_debug "User ignore (path): ${item}"
+      continue
+    fi
+    _dev_sz=$(mac_ops_get_dir_size "${item}")
+    if mac_ops_trash_move "${item}" "CocoaPods cache cleanup" "dev-cleanup"; then
+      _dev_cleaned=$((_dev_cleaned + _dev_sz))
+    fi
   done
 
-  if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
+  if [[ "${MAC_OPS_DRY_RUN}" == "true" || ${_dev_cleaned} -eq 0 ]]; then
     return 0
   fi
 
-  MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
+  MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
   MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-  mac_ops_log_info "CocoaPods cache cleanup completed: $(mac_ops_format_bytes ${cache_size})"
+  mac_ops_log_info "CocoaPods cache cleanup completed: $(mac_ops_format_bytes ${_dev_cleaned})"
 
   return 0
 }

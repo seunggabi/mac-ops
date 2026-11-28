@@ -556,6 +556,8 @@ DERIVED="${HOME}/Library/Developer/Xcode/DerivedData"
 SIMCACHE="${HOME}/Library/Developer/CoreSimulator/Caches"
 mkdir -p "${DERIVED}/Idle-abc" "${DERIVED}/Held-def" "${SIMCACHE}/dyld" "${SIMCACHE}/held"
 print "x" > "${DERIVED}/Idle-abc/data"
+# DerivedData now has an age limit: the idle fixture must be older than the threshold
+make_old "${DERIVED}/Idle-abc"
 print "x" > "${DERIVED}/Held-def/data"
 print "x" > "${SIMCACHE}/dyld/data"
 print "x" > "${SIMCACHE}/held/data"

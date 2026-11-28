@@ -58,14 +58,15 @@ mac_ops_cache_cleanup() {
     } | sort -u
   )
 
-  # Collect running app bundle IDs
-  local running_bundles
-  running_bundles=$(
-    lsappinfo list 2>/dev/null | grep 'bundleID=' | sed 's/.*bundleID="\([^"]*\)".*/\1/' | grep -v '^\[' | sort -u
-  )
+  # Collect running apps (lsappinfo plus every running .app). When the list
+  # cannot be built (lsappinfo missing, failing or empty), every cache counts
+  # as in use: nothing is moved in this run.
+  if ! _mac_ops_fc_load_running_apps; then
+    mac_ops_log_warn "Cache cleanup skipped: running-app list unavailable (lsappinfo failed or returned nothing), every cache is treated as in use"
+    return 0
+  fi
 
   mac_ops_log_debug "Installed apps: $(echo "${installed_bundles}" | wc -l | tr -d ' ') bundles"
-  mac_ops_log_debug "Running apps: $(echo "${running_bundles}" | wc -l | tr -d ' ') bundles"
 
   # Check if cache directory exists
   if [[ ! -d "${cache_dir}" ]]; then
@@ -111,7 +112,7 @@ mac_ops_cache_cleanup() {
     fi
 
     # Skip if app is currently running
-    if echo "${running_bundles}" | grep -qx "${bundle_name}"; then
+    if print -r -- "${_MAC_OPS_FC_RUNNING_BUNDLES}" | grep -qxF -- "${bundle_name}"; then
       mac_ops_log_debug "Running app cache protected: ${bundle_name}"
       continue
     fi

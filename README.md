@@ -73,12 +73,12 @@ Pure zsh. No Python, no Ruby, no Node.js. Only macOS built-in tools (`zsh`, `plu
 | `cache` | Clean `~/Library/Caches` (Apple system caches excluded) |
 | `tmp` | Clean `/tmp`, `/private/var/folders`, CrashReporter |
 | `log` | Clean `~/Library/Logs`, system diagnostic reports |
-| `zombie` | Detect and terminate zombie processes |
+| `zombie` | Report zombie processes (opt-in: send SIGCHLD to eligible parents; never SIGTERM/SIGKILL) |
 | `orphan` | Report orphan process candidates (sends SIGTERM only with `MAC_OPS_ORPHAN_ACTION=term`, never SIGKILL) |
 | `orphan-app` | Clean residual files from deleted applications |
-| `brew` | Clean Homebrew caches and outdated downloads |
-| `dev` | Clean Xcode, npm, yarn, pnpm, pip, Gradle caches |
-| `docker` | Clean dangling images, stopped containers, unused volumes |
+| `brew` | Clean Homebrew caches and outdated downloads (skipped while a running process uses an old keg) |
+| `dev` | Clean Xcode DerivedData and simulator caches, npm, yarn, pnpm, pip, Gradle and CocoaPods caches; DerivedData, CocoaPods and package-manager items used within 30 days are kept; Xcode Archives are only reported |
+| `docker` | Report Docker disk usage (opt-in: prune old unused images and build cache; never containers or volumes) |
 | `browser` | Clean Safari, Chrome, Firefox caches |
 
 ### Parallel Execution
@@ -213,7 +213,8 @@ MAC_OPS_CACHE_RECENT_DAYS=1 mac-ops run --module=cache
 # Orphan app data settings
 export MAC_OPS_ORPHAN_APP_GRACE_DAYS=7          # Skip entries modified (or holding a file modified) within N days (default: 7)
 export MAC_OPS_ORPHAN_APP_DATA_ACTION=report    # Orphans in settings/data locations: report (default) or trash
-# Settings/data locations: Application Support, Preferences, Containers, HTTPStorages (cookies).
+# Settings/data locations: Application Support, Preferences, Containers, HTTPStorages (cookies),
+# WebKit (per-app local storage, IndexedDB).
 # Only the exact value "trash" moves them; any other value reports.
 # An entry is never touched when an installed app (or a helper/login item nested inside one)
 # has the same bundle ID vendor, e.g. com.garmin.*, or when it is a symbolic link.
@@ -395,7 +396,18 @@ coreaudiod, opendirectoryd
 
 ### Docker Module
 
-Only works when Docker Desktop is running. Automatically skipped if Docker is not installed or stopped.
+Report-only by default: logs `docker system df`, the number of stopped containers, unused images older than the age limit and the reclaimable build cache. Stopped containers and volumes are never removed (they can hold data, and Docker deletes permanently). Skipped when Docker is not installed or the daemon does not answer `docker info` within `MAC_OPS_DOCKER_PROBE_TIMEOUT` seconds (default 10); Docker Desktop is never started or quit.
+
+```bash
+export MAC_OPS_DOCKER_ACTION=report             # report (default) or prune; only the exact value "prune" acts
+export MAC_OPS_DOCKER_PRUNE_UNTIL_HOURS=720     # prune: only images/build cache older than N hours (default 720 = 30 days)
+# prune runs exactly: docker image prune -a --filter "until=<N>h" -f
+#                     docker builder prune --filter "until=<N>h" -f
+```
+
+### Zombie Module
+
+Report-only by default: each zombie is logged with its PID, parent PID, parent executable and age. A zombie holds no resources, so its parent is never terminated. `MAC_OPS_ZOMBIE_ACTION=sigchld` (exact value) sends SIGCHLD to the parent, never to PID 1, to an ancestor of the mac-ops run, to protected or ignored processes, or to security software.
 
 ### Size Guard
 
