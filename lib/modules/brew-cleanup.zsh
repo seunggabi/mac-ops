@@ -3,6 +3,9 @@
 # Clean brew cache and outdated formulas
 # =============================================================================
 
+# zsh-only nested expansions and modifiers; false positives in bash mode
+# shellcheck disable=SC2296,SC2299
+
 # -----------------------------------------------------------------------------
 # Homebrew cache and outdated package cleanup
 # Usage: mac_ops_brew_cleanup
@@ -17,6 +20,22 @@ mac_ops_brew_cleanup() {
   # Another brew process is using the cache (install/upgrade in progress)
   if _mac_ops_fc_manager_running "brew"; then
     mac_ops_log_debug "Protected, skipped (brew-cleanup): Homebrew cache (reason: brew is running)"
+    return 0
+  fi
+
+  # brew cleanup removes old kegs; a process started before an upgrade can
+  # still be executing from one (a long-lived node or python)
+  local keg_holders="" line=""
+  keg_holders=$(_mac_ops_brew_old_kegs_in_use)
+  if [[ $? -ne 0 ]]; then
+    mac_ops_log_warn "Homebrew cleanup skipped this run: cannot list running processes (ps failed)"
+    return 0
+  fi
+  if [[ -n "${keg_holders}" ]]; then
+    mac_ops_log_warn "Homebrew cleanup skipped this run: running processes still use old kegs"
+    while IFS= read -r line; do
+      [[ -n "${line}" ]] && mac_ops_log_warn "  ${line}"
+    done <<< "${keg_holders}"
     return 0
   fi
 
@@ -93,5 +112,46 @@ mac_ops_brew_cleanup() {
     mac_ops_log_debug "brew cleanup output: ${cleanup_output}"
   fi
 
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Print one line per running executable under the Cellar whose keg is
+# not the currently linked version of its formula ("<exec> uses keg <formula>
+# <version>, linked: <version|none>"). A formula whose opt link cannot be
+# resolved counts as not linked. Return 1 if the process list cannot be built.
+# Usage: _mac_ops_brew_old_kegs_in_use
+# -----------------------------------------------------------------------------
+_mac_ops_brew_old_kegs_in_use() {
+  local ps_out="" exec_path="" rest="" formula="" version="" linked="" opt_link=""
+  local prefix=""
+  local -A reported=()
+
+  ps_out=$(ps -eo comm= 2>/dev/null)
+  if [[ $? -ne 0 || -z "${ps_out}" ]]; then
+    return 1
+  fi
+  prefix=$(brew --prefix 2>/dev/null)
+
+  while IFS= read -r exec_path; do
+    [[ "${exec_path}" == */Cellar/* ]] || continue
+    rest="${exec_path#*/Cellar/}"
+    formula="${rest%%/*}"
+    version="${${rest#*/}%%/*}"
+    [[ -z "${formula}" || -z "${version}" ]] && continue
+
+    linked=""
+    opt_link="${exec_path%%/Cellar/*}/opt/${formula}"
+    [[ ! -L "${opt_link}" && -n "${prefix}" ]] && opt_link="${prefix}/opt/${formula}"
+    if [[ -L "${opt_link}" && -d "${opt_link}" ]]; then
+      linked="${opt_link:A:t}"
+    fi
+
+    if [[ "${version}" != "${linked}" ]]; then
+      [[ -n "${reported[${exec_path}]:-}" ]] && continue
+      reported[${exec_path}]=1
+      print -r -- "${exec_path} uses keg ${formula} ${version}, linked: ${linked:-none}"
+    fi
+  done <<< "${ps_out}"
   return 0
 }

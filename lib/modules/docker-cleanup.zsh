@@ -1,164 +1,195 @@
 # =============================================================================
 # mac-ops: Docker cleanup module
-# Clean unused images, containers, volumes, and build cache
+# Report Docker disk usage; optionally prune old unused images and build cache
 # =============================================================================
+#
+# Docker deletes permanently: nothing it prunes goes to the mac-ops trash.
+# Stopped containers (with their writable layers) and volumes (which can hold
+# databases) are data, so this module never prunes them, under any setting,
+# and never passes --volumes.
+#
+# What the module does:
+#   report (default) - log `docker system df`, the number of stopped
+#                      containers, unused images older than the age limit and
+#                      the reclaimable build cache; change nothing
+#   prune            - additionally run exactly these two commands:
+#                        docker image prune -a --filter "until=<N>h" -f
+#                        docker builder prune --filter "until=<N>h" -f
+# Only the exact value "prune" acts. Every other value, including an empty
+# one, "Prune" or "prune " with a trailing space, behaves like "report".
+
+# zsh-only parameter flags; false positives in bash mode
+# shellcheck disable=SC2296,SC2299
+
+MAC_OPS_DOCKER_ACTION=${MAC_OPS_DOCKER_ACTION:-report}
+
+# Age limit for pruned images and build cache, in hours (720 = 30 days)
+MAC_OPS_DOCKER_PRUNE_UNTIL_HOURS=${MAC_OPS_DOCKER_PRUNE_UNTIL_HOURS:-720}
+
+# Seconds to wait for `docker info`; a hung daemon must not block the run
+MAC_OPS_DOCKER_PROBE_TIMEOUT=${MAC_OPS_DOCKER_PROBE_TIMEOUT:-10}
 
 # -----------------------------------------------------------------------------
-# Docker cleanup
-# dangling images, stopped containers, unused volumes, build cache
-# Note: Docker uses its own deletion mechanism (cannot move to trash)
+# Docker module main function
+# Never starts or quits Docker Desktop: an unreachable daemon means "skip".
 # -----------------------------------------------------------------------------
 mac_ops_docker_cleanup() {
-  # Check if docker command exists
+  local hours="${MAC_OPS_DOCKER_PRUNE_UNTIL_HOURS}"
+
   if ! command -v docker &>/dev/null; then
     mac_ops_log_info "Docker is not installed. Skipping."
     return 0
   fi
 
-  # Check if Docker daemon is running
-  if ! docker info &>/dev/null; then
-    mac_ops_log_warn "Docker daemon is not running. Skipping."
+  if ! _mac_ops_docker_daemon_reachable; then
+    mac_ops_log_warn "Docker daemon is not reachable (not running, or no answer within ${MAC_OPS_DOCKER_PROBE_TIMEOUT}s). Skipping."
     return 0
   fi
 
-  mac_ops_log_info "Starting Docker cleanup..."
-  mac_ops_log_info "(Docker uses its own deletion mechanism and does not move to trash)"
+  if [[ ! "${hours}" =~ ^[0-9]+$ ]] || (( hours < 24 )); then
+    mac_ops_log_warn "MAC_OPS_DOCKER_PRUNE_UNTIL_HOURS='${hours}' is not a whole number of at least 24, using 720"
+    hours=720
+  fi
 
-  local total_reclaimed=0
+  _mac_ops_docker_report "${hours}"
 
-  # DRY_RUN mode
-  if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-    mac_ops_log_info "[DRY_RUN] Will perform Docker cleanup:"
-
-    # Check dangling images
-    local dangling_images
-    dangling_images=$(docker images -f "dangling=true" -q 2>/dev/null | wc -l | tr -d ' ')
-    if [[ ${dangling_images} -gt 0 ]]; then
-      mac_ops_log_info "[DRY_RUN] - dangling images: ${dangling_images} items"
-    fi
-
-    # Check stopped containers
-    local stopped_containers
-    stopped_containers=$(docker ps -a -f "status=exited" -q 2>/dev/null | wc -l | tr -d ' ')
-    if [[ ${stopped_containers} -gt 0 ]]; then
-      mac_ops_log_info "[DRY_RUN] - stopped containers: ${stopped_containers} items"
-    fi
-
-    # Check unused volumes
-    local unused_volumes
-    unused_volumes=$(docker volume ls -f "dangling=true" -q 2>/dev/null | wc -l | tr -d ' ')
-    if [[ ${unused_volumes} -gt 0 ]]; then
-      mac_ops_log_info "[DRY_RUN] - unused volumes: ${unused_volumes} items"
-    fi
-
-    mac_ops_log_info "[DRY_RUN] - Will clean build cache"
-
+  if [[ "${MAC_OPS_DOCKER_ACTION}" != "prune" ]]; then
+    mac_ops_log_info "Docker: report only, nothing removed (set MAC_OPS_DOCKER_ACTION=prune to remove unused images and build cache older than ${hours}h)"
     return 0
   fi
 
-  # 1. Clean dangling images
-  mac_ops_log_info "Cleaning dangling images..."
-  local image_output
-  image_output=$(docker image prune -f 2>&1)
-  local image_status=$?
-
-  if [[ ${image_status} -eq 0 ]]; then
-    # Extract numbers from "Total reclaimed space: 1.2GB" format
-    local image_reclaimed
-    image_reclaimed=$(echo "${image_output}" | grep -i "Total reclaimed space" | sed -E 's/.*: ([0-9.]+)([KMGT]?B).*/\1 \2/')
-
-    if [[ -n "${image_reclaimed}" ]]; then
-      mac_ops_log_info "Dangling images cleanup completed: ${image_reclaimed}"
-      # Convert to bytes and update counter
-      local bytes
-      bytes=$(_mac_ops_docker_parse_size "${image_reclaimed}")
-      total_reclaimed=$((total_reclaimed + bytes))
-    else
-      mac_ops_log_debug "dangling images: No items to clean"
-    fi
-  else
-    mac_ops_log_warn "Dangling images cleanup failed: ${image_output}"
-  fi
-
-  # 2. Clean stopped containers
-  mac_ops_log_info "Cleaning stopped containers..."
-  local container_output
-  container_output=$(docker container prune -f 2>&1)
-  local container_status=$?
-
-  if [[ ${container_status} -eq 0 ]]; then
-    local container_reclaimed
-    container_reclaimed=$(echo "${container_output}" | grep -i "Total reclaimed space" | sed -E 's/.*: ([0-9.]+)([KMGT]?B).*/\1 \2/')
-
-    if [[ -n "${container_reclaimed}" ]]; then
-      mac_ops_log_info "Stopped containers cleanup completed: ${container_reclaimed}"
-      local bytes
-      bytes=$(_mac_ops_docker_parse_size "${container_reclaimed}")
-      total_reclaimed=$((total_reclaimed + bytes))
-    else
-      mac_ops_log_debug "stopped containers: No items to clean"
-    fi
-  else
-    mac_ops_log_warn "Stopped containers cleanup failed: ${container_output}"
-  fi
-
-  # 3. Clean unused volumes
-  mac_ops_log_info "Cleaning unused volumes..."
-  local volume_output
-  volume_output=$(docker volume prune -f 2>&1)
-  local volume_status=$?
-
-  if [[ ${volume_status} -eq 0 ]]; then
-    local volume_reclaimed
-    volume_reclaimed=$(echo "${volume_output}" | grep -i "Total reclaimed space" | sed -E 's/.*: ([0-9.]+)([KMGT]?B).*/\1 \2/')
-
-    if [[ -n "${volume_reclaimed}" ]]; then
-      mac_ops_log_info "Unused volumes cleanup completed: ${volume_reclaimed}"
-      local bytes
-      bytes=$(_mac_ops_docker_parse_size "${volume_reclaimed}")
-      total_reclaimed=$((total_reclaimed + bytes))
-    else
-      mac_ops_log_debug "unused volumes: No items to clean"
-    fi
-  else
-    mac_ops_log_warn "Unused volumes cleanup failed: ${volume_output}"
-  fi
-
-  # 4. Clean build cache
-  mac_ops_log_info "Cleaning build cache..."
-  local builder_output
-  builder_output=$(docker builder prune -f 2>&1)
-  local builder_status=$?
-
-  if [[ ${builder_status} -eq 0 ]]; then
-    local builder_reclaimed
-    builder_reclaimed=$(echo "${builder_output}" | grep -i "Total" | sed -E 's/.*: ([0-9.]+)([KMGT]?B).*/\1 \2/')
-
-    if [[ -n "${builder_reclaimed}" ]]; then
-      mac_ops_log_info "Build cache cleanup completed: ${builder_reclaimed}"
-      local bytes
-      bytes=$(_mac_ops_docker_parse_size "${builder_reclaimed}")
-      total_reclaimed=$((total_reclaimed + bytes))
-    else
-      mac_ops_log_debug "build cache: No items to clean"
-    fi
-  else
-    mac_ops_log_warn "Build cache cleanup failed: ${builder_output}"
-  fi
-
-  # Update global counter
-  MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + total_reclaimed))
-  MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
-
-  local total_mb=$((total_reclaimed / 1048576))
-  mac_ops_log_info "Docker cleanup completed: Total $(mac_ops_format_bytes ${total_reclaimed}) freed"
-
+  _mac_ops_docker_prune "${hours}"
   return 0
 }
 
 # =============================================================================
 # Internal helper functions
 # =============================================================================
+
+# -----------------------------------------------------------------------------
+# Return 0 if `docker info` succeeds within MAC_OPS_DOCKER_PROBE_TIMEOUT seconds.
+# The probe runs as a background job of this shell; on timeout only that job
+# (our own child) is terminated.
+# -----------------------------------------------------------------------------
+_mac_ops_docker_daemon_reachable() {
+  local limit="${MAC_OPS_DOCKER_PROBE_TIMEOUT}"
+  local pid=0 ticks=0 rc=0
+
+  if [[ ! "${limit}" =~ ^[0-9]+$ ]] || (( limit < 1 )); then
+    limit=10
+  fi
+
+  docker info >/dev/null 2>&1 &
+  pid=$!
+  while kill -0 "${pid}" 2>/dev/null; do
+    if (( ticks >= limit * 10 )); then
+      kill -TERM "${pid}" 2>/dev/null
+      wait "${pid}" 2>/dev/null
+      return 1
+    fi
+    sleep 0.1
+    ticks=$((ticks + 1))
+  done
+  wait "${pid}"
+  rc=$?
+  return ${rc}
+}
+
+# -----------------------------------------------------------------------------
+# Log disk usage, stopped containers, old unused images and build cache.
+# Read-only: only `system df`, `ps`, `inspect` and `image ls` are called.
+# Usage: _mac_ops_docker_report <hours>
+# -----------------------------------------------------------------------------
+_mac_ops_docker_report() {
+  local hours="${1}"
+  local df_out="" line="" stopped="" build_cache=""
+  local now_epoch=0 cutoff_epoch=0 created_epoch=0 old_images=0
+  local image_id="" created="" container_ids=""
+  local -A used_images=()
+
+  df_out=$(docker system df 2>/dev/null)
+  if [[ -n "${df_out}" ]]; then
+    mac_ops_log_info "Docker disk usage (docker system df):"
+    while IFS= read -r line; do
+      [[ -n "${line}" ]] && mac_ops_log_info "  ${line}"
+    done <<< "${df_out}"
+  fi
+
+  stopped=$(docker ps -a --filter "status=exited" --filter "status=created" -q 2>/dev/null | grep -c .)
+  mac_ops_log_info "Docker: ${stopped:-0} stopped containers (never removed by mac-ops; remove them yourself with docker rm if they hold nothing you need)"
+
+  # Images used by any container, running or stopped, are never "unused"
+  container_ids=$(docker ps -a -q 2>/dev/null)
+  if [[ -n "${container_ids}" ]]; then
+    while IFS= read -r image_id; do
+      [[ -n "${image_id}" ]] && used_images[${image_id}]=1
+    done < <(docker inspect --format '{{.Image}}' ${(f)container_ids} 2>/dev/null)
+  fi
+
+  now_epoch=$(date +%s)
+  cutoff_epoch=$((now_epoch - hours * 3600))
+  while IFS=$'\t' read -r image_id created; do
+    [[ -z "${image_id}" || -n "${used_images[${image_id}]+_}" ]] && continue
+    # CreatedAt looks like "2024-05-01 10:00:00 +0900 KST"
+    created_epoch=$(date -j -f '%Y-%m-%d %H:%M:%S %z' "${created% *}" +%s 2>/dev/null)
+    [[ "${created_epoch}" =~ ^[0-9]+$ ]] || continue
+    (( created_epoch < cutoff_epoch )) && old_images=$((old_images + 1))
+  done < <(docker image ls --no-trunc --format '{{.ID}}{{"\t"}}{{.CreatedAt}}' 2>/dev/null)
+  mac_ops_log_info "Docker: ${old_images} unused images older than ${hours}h"
+
+  build_cache=$(docker system df --format '{{.Type}}{{"\t"}}{{.Reclaimable}}' 2>/dev/null | awk -F'\t' '$1 == "Build Cache" {print $2}')
+  mac_ops_log_info "Docker: build cache reclaimable: ${build_cache:-unknown}"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Remove unused images and build cache older than <hours>. Nothing else.
+# Usage: _mac_ops_docker_prune <hours>
+# -----------------------------------------------------------------------------
+_mac_ops_docker_prune() {
+  local hours="${1}"
+  local filter="until=${hours}h"
+  local output="" rc=0 reclaimed="" bytes=0 total=0
+
+  if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
+    mac_ops_log_info "[DRY_RUN] Would run: docker image prune -a --filter \"${filter}\" -f"
+    mac_ops_log_info "[DRY_RUN] Would run: docker builder prune --filter \"${filter}\" -f"
+    return 0
+  fi
+
+  mac_ops_log_info "Removing unused images older than ${hours}h (permanent, not moved to the trash)..."
+  output=$(docker image prune -a --filter "${filter}" -f 2>&1)
+  rc=$?
+  if [[ ${rc} -eq 0 ]]; then
+    reclaimed=$(print -r -- "${output}" | grep -i "Total reclaimed space" | sed -E 's/.*: ([0-9.]+)([KMGT]?B).*/\1 \2/')
+    if [[ -n "${reclaimed}" ]]; then
+      bytes=$(_mac_ops_docker_parse_size "${reclaimed}")
+      total=$((total + bytes))
+      mac_ops_log_info "Unused images removed: ${reclaimed}"
+    fi
+  else
+    mac_ops_log_warn "docker image prune failed: ${output}"
+  fi
+
+  mac_ops_log_info "Removing build cache older than ${hours}h (permanent, not moved to the trash)..."
+  output=$(docker builder prune --filter "${filter}" -f 2>&1)
+  rc=$?
+  if [[ ${rc} -eq 0 ]]; then
+    reclaimed=$(print -r -- "${output}" | grep -i "Total" | sed -E 's/.*: ([0-9.]+)([KMGT]?B).*/\1 \2/')
+    if [[ -n "${reclaimed}" ]]; then
+      bytes=$(_mac_ops_docker_parse_size "${reclaimed}")
+      total=$((total + bytes))
+      mac_ops_log_info "Build cache removed: ${reclaimed}"
+    fi
+  else
+    mac_ops_log_warn "docker builder prune failed: ${output}"
+  fi
+
+  MAC_OPS_CLEANED_BYTES=$((${MAC_OPS_CLEANED_BYTES:-0} + total))
+  MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
+  mac_ops_log_info "Docker prune completed: Total $(mac_ops_format_bytes ${total}) freed"
+  return 0
+}
 
 # Convert Docker size string to bytes
 # Input example: "1.2 GB", "500 MB", "10 KB", "0B"
