@@ -1017,6 +1017,49 @@ test_install_launchctl_failure() {
 }
 test_install_launchctl_failure
 
+# monitor kill: a protected process is skipped, an ordinary one gets SIGTERM.
+# ps and kill are shell functions over a fake process list; no real process
+# is listed or signalled.
+test_monitor_kill_protected() {
+    print "[TEST] test_monitor_kill_protected"
+    local fx="${TEST_TMPDIR}/monitorfx" out input
+    mkdir -p "${fx}/home"
+    for input in all 101 202; do
+        : > "${fx}/kills"
+        out=$(print -r -- "${input}" | HOME="${fx}/home" zsh -f -c '
+            MAC_OPS_ROOT="$1"; kills="$2"
+            export MAC_OPS_HOME="${HOME}/.mac-ops" MAC_OPS_LOG_DIR="${HOME}/.mac-ops/.logs" MAC_OPS_SCHEDULED=false
+            for f in core/config core/logger core/safety utils/format; do source "${MAC_OPS_ROOT}/lib/${f}.zsh"; done
+            source "${MAC_OPS_ROOT}/lib/modules/monitor.zsh"
+            ps() {
+                if [[ "$1" == "-p" ]]; then
+                    case "$2" in
+                        101) print -r -- "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer" ;;
+                        202) print -r -- "/usr/local/bin/my-node-app" ;;
+                    esac
+                    return 0
+                fi
+                print -r -- "  PID    RSS  %CPU COMM"
+                print -r -- "  101 2097152  1.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+                print -r -- "  202 2097152  1.0 /usr/local/bin/my-node-app"
+            }
+            kill() { print -r -- "$*" >> "${kills}"; return 0; }
+            [[ "$(whence -w kill)" == "kill: function" && "$(whence -w ps)" == "ps: function" ]] || { print REAL_KILL_OR_PS; exit 9; }
+            mac_ops_monitor_kill 500
+        ' _ "${MAC_OPS_ROOT}" "${fx}/kills" 2>&1)
+        assert_output_not_contains "${out}" "REAL_KILL_OR_PS" "monitor kill ${input}: kill and ps are test functions"
+        assert_eq "$(grep -c -- '-15 101' "${fx}/kills")" "0" "monitor kill ${input}: protected WindowServer (PID 101) is not signalled"
+        case "${input}" in
+            all|202)
+                assert_eq "$(cat "${fx}/kills")" "-15 202" "monitor kill ${input}: ordinary process (PID 202) gets SIGTERM" ;;
+            101)
+                assert_eq "$(grep -c . "${fx}/kills")" "0" "monitor kill 101: nothing signalled"
+                assert_output_contains "${out}" "Skipping protected process: WindowServer (PID 101)" "monitor kill 101: protected process reported as skipped" ;;
+        esac
+    done
+}
+test_monitor_kill_protected
+
 print ""
 
 # =============================================================================

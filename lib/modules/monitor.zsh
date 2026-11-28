@@ -407,7 +407,9 @@ mac_ops_monitor_kill() {
       for p in "${candidate_pids[@]}"; do
         local pname
         pname=$(ps -p "$p" -o comm= 2>/dev/null | awk -F/ '{print $NF}')
-        if mac_ops_is_process_protected "${pname}" 2>/dev/null; then
+        # mac_ops_is_process_protected returns 1 for a protected process
+        # (and for an empty name), 0 when it may be signalled
+        if ! mac_ops_is_process_protected "${pname}" >/dev/null 2>&1; then
           printf "  \033[33m⚠\033[0m  Skipping protected process: %s (PID %s)\n" "$pname" "$p"
         elif kill -15 "$p" 2>/dev/null; then
           printf "  \033[32m✓\033[0m  SIGTERM sent to %s (PID %s)\n" "${pname:-unknown}" "$p"
@@ -420,7 +422,9 @@ mac_ops_monitor_kill() {
       if [[ "${input}" =~ ^[0-9]+$ ]]; then
         local pname
         pname=$(ps -p "$input" -o comm= 2>/dev/null | awk -F/ '{print $NF}')
-        if mac_ops_is_process_protected "${pname}" 2>/dev/null; then
+        # mac_ops_is_process_protected returns 1 for a protected process
+        # (and for an empty name), 0 when it may be signalled
+        if ! mac_ops_is_process_protected "${pname}" >/dev/null 2>&1; then
           printf "  \033[33m⚠\033[0m  Skipping protected process: %s (PID %s)\n" "$pname" "$input"
         elif kill -15 "$input" 2>/dev/null; then
           printf "  \033[32m✓\033[0m  SIGTERM sent to %s (PID %s)\n" "${pname:-unknown}" "$input"
