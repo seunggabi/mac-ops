@@ -74,7 +74,7 @@ Pure zsh. No Python, no Ruby, no Node.js. Only macOS built-in tools (`zsh`, `plu
 | `tmp` | Clean `/tmp`, `/private/var/folders`, CrashReporter |
 | `log` | Clean `~/Library/Logs`, system diagnostic reports |
 | `zombie` | Detect and terminate zombie processes |
-| `orphan` | Detect and terminate orphan processes |
+| `orphan` | Report orphan process candidates (sends SIGTERM only with `MAC_OPS_ORPHAN_ACTION=term`, never SIGKILL) |
 | `orphan-app` | Clean residual files from deleted applications |
 | `brew` | Clean Homebrew caches and outdated downloads |
 | `dev` | Clean Xcode, npm, yarn, pnpm, pip, Gradle caches |
@@ -192,6 +192,10 @@ You can customize cleanup behavior by setting environment variables:
 export MAC_OPS_CACHE_MAX_AGE_DAYS=30   # Delete caches older than N days (default: 30)
 export MAC_OPS_CACHE_RECENT_DAYS=7     # Protect caches used within N days (default: 7)
 
+# Orphan process settings
+export MAC_OPS_ORPHAN_ACTION=report          # report (default): list candidates only, term: send SIGTERM to candidates
+export MAC_OPS_ORPHAN_MIN_RUNNING_HOURS=24   # Only consider processes running N hours or more (whole number >= 1, default: 24)
+
 # Example: More aggressive cache cleanup
 MAC_OPS_CACHE_MAX_AGE_DAYS=30 mac-ops run --module=cache
 
@@ -209,6 +213,23 @@ export MAC_OPS_ORPHAN_APP_DATA_ACTION=report    # Orphans in settings/data locat
 # Example: Preview what opting in to moving orphan settings/data would do
 MAC_OPS_ORPHAN_APP_DATA_ACTION=trash mac-ops run --module=orphan-app --dry-run
 ```
+
+### Orphan Processes
+
+The `orphan` module reports by default and never ends a process unless you set `MAC_OPS_ORPHAN_ACTION=term`. A process is a candidate only if all of these hold:
+
+- its parent is PID 1 and it is owned by the current user
+- it is not managed by launchd (its PID is not in `launchctl list`)
+- it has no controlling terminal and its executable is not inside a `.app` bundle
+- neither it nor any ancestor or descendant is a terminal, shell, tmux, or coding-agent session
+- it is not part of mac-ops' own process tree and is not security software
+- it has no child process (something may still depend on it)
+- its executable is not a user daemon started on purpose: `gpg-agent`, `ssh-agent`, `ollama`, `limactl`, `colima`, `qemu-system-*`, `pm2` (and node running as a pm2 God daemon), `emacs`, `tmux`, `screen`, `mosh-server`, `syncthing`, `rclone`, `cloudflared`, `ngrok`, `tailscaled`, databases (`postgres`, `mysqld`, `mariadbd`, `redis-server`, `mongod`), web servers (`nginx`, `httpd`, `caddy`), container engines (`dockerd`, `containerd`, `podman`), `jupyter*`, `code-server`, and a few more
+- it passes the system path, protected process, and ignore file rules, and has run for `MAC_OPS_ORPHAN_MIN_RUNNING_HOURS` or more (a whole number of at least 1; any other value logs a warning and uses 24)
+
+Each candidate is logged with its PID, uptime, memory, executable, and the checks it passed. All name rules compare the executable, not the command-line arguments. With `MAC_OPS_ORPHAN_ACTION=term`, the PID is re-checked right before the signal (same start time, same executable, and the full candidate rule run again on a fresh `ps` row) and only SIGTERM is sent, never SIGKILL.
+
+> **Warning:** The daemon list cannot know every tool. Before you turn on `MAC_OPS_ORPHAN_ACTION=term`, run the module in report mode, and put every long-running tool you start by hand (local servers, agents, tunnels, VMs) in `~/.mac-ops/ignore`.
 
 ### Ignore File
 
