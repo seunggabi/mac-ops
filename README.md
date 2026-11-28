@@ -194,7 +194,7 @@ export MAC_OPS_CACHE_RECENT_DAYS=7     # Protect caches used within N days (defa
 
 # Orphan process settings
 export MAC_OPS_ORPHAN_ACTION=report          # report (default): list candidates only, term: send SIGTERM to candidates
-export MAC_OPS_ORPHAN_MIN_RUNNING_HOURS=24   # Only consider processes running N hours or more (default: 24)
+export MAC_OPS_ORPHAN_MIN_RUNNING_HOURS=24   # Only consider processes running N hours or more (whole number >= 1, default: 24)
 
 # Example: More aggressive cache cleanup
 MAC_OPS_CACHE_MAX_AGE_DAYS=30 mac-ops run --module=cache
@@ -212,9 +212,13 @@ The `orphan` module reports by default and never ends a process unless you set `
 - it has no controlling terminal and its executable is not inside a `.app` bundle
 - neither it nor any ancestor or descendant is a terminal, shell, tmux, or coding-agent session
 - it is not part of mac-ops' own process tree and is not security software
-- it passes the system path, protected process, and ignore file rules, and has run for `MAC_OPS_ORPHAN_MIN_RUNNING_HOURS` or more
+- it has no child process (something may still depend on it)
+- its executable is not a user daemon started on purpose: `gpg-agent`, `ssh-agent`, `ollama`, `limactl`, `colima`, `qemu-system-*`, `pm2` (and node running as a pm2 God daemon), `emacs`, `tmux`, `screen`, `mosh-server`, `syncthing`, `rclone`, `cloudflared`, `ngrok`, `tailscaled`, databases (`postgres`, `mysqld`, `mariadbd`, `redis-server`, `mongod`), web servers (`nginx`, `httpd`, `caddy`), container engines (`dockerd`, `containerd`, `podman`), `jupyter*`, `code-server`, and a few more
+- it passes the system path, protected process, and ignore file rules, and has run for `MAC_OPS_ORPHAN_MIN_RUNNING_HOURS` or more (a whole number of at least 1; any other value logs a warning and uses 24)
 
-Each candidate is logged with its PID, uptime, memory, executable, and the checks it passed. All name rules compare the executable, not the command-line arguments. With `MAC_OPS_ORPHAN_ACTION=term`, the PID is re-checked right before the signal (same start time, same executable) and only SIGTERM is sent, never SIGKILL.
+Each candidate is logged with its PID, uptime, memory, executable, and the checks it passed. All name rules compare the executable, not the command-line arguments. With `MAC_OPS_ORPHAN_ACTION=term`, the PID is re-checked right before the signal (same start time, same executable, and the full candidate rule run again on a fresh `ps` row) and only SIGTERM is sent, never SIGKILL.
+
+> **Warning:** The daemon list cannot know every tool. Before you turn on `MAC_OPS_ORPHAN_ACTION=term`, run the module in report mode, and put every long-running tool you start by hand (local servers, agents, tunnels, VMs) in `~/.mac-ops/ignore`.
 
 ### Ignore File
 

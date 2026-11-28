@@ -15,11 +15,16 @@
 #   - its executable is not inside a .app bundle
 #   - neither it nor any ancestor/descendant is a terminal, shell, tmux or
 #     coding-agent session, and no descendant has a controlling tty
+#   - it has no child process (something may depend on it)
+#   - its executable is not a user daemon started on purpose (gpg-agent,
+#     ollama, limactl, databases, web servers, a pm2 God daemon, ...)
 #   - it passes the path / protected-process / user-ignore filters
 #   - it has been running for MAC_OPS_ORPHAN_MIN_RUNNING_HOURS or more
+#     (a whole number >= 1; anything else falls back to 24)
 #
 # All name-based rules compare the executable (`ps -o comm=`), never the
-# argument list.
+# argument list. The one exception only protects: a node process whose title
+# starts with "PM2" (pm2 God daemon) is never a candidate.
 # =============================================================================
 
 # --- Default settings ---
@@ -33,6 +38,17 @@ _MAC_OPS_ORPHAN_SECURITY_KEYWORDS=(
   fortinet forticlient ahnlab astx jiran jkok pnpsecure pcassist
   wizvera delfino veraport iniline crossex initech inisafe nprotect
   raon touchen
+)
+
+# --- User daemons: long-running tools started on purpose, never signalled ---
+# Exact, case-insensitive match on the executable base name (zsh patterns).
+_MAC_OPS_ORPHAN_USER_DAEMONS=(
+  gpg-agent dirmngr scdaemon ssh-agent
+  ollama limactl colima 'qemu-system-*' podman dockerd containerd buildkitd
+  pm2 emacs tmux screen mosh-server
+  syncthing rclone cloudflared ngrok tailscaled
+  postgres postmaster mysqld mariadbd redis-server mongod memcached
+  nginx httpd caddy 'jupyter*' code-server
 )
 
 # --- Process table snapshot (filled by _mac_ops_orphan_load_snapshot) ---
@@ -60,7 +76,10 @@ typeset -g _MAC_OPS_ORPHAN_CHECKS=""
 #    candidate (same start time, same executable) and send SIGTERM
 # -----------------------------------------------------------------------------
 mac_ops_orphan_killer() {
-  local min_hours="${MAC_OPS_ORPHAN_MIN_RUNNING_HOURS}"
+  local min_hours=""
+  if ! min_hours=$(_mac_ops_orphan_min_hours); then
+    mac_ops_log_warn "MAC_OPS_ORPHAN_MIN_RUNNING_HOURS='${MAC_OPS_ORPHAN_MIN_RUNNING_HOURS}' is not a whole number of hours >= 1; using 24"
+  fi
 
   mac_ops_log_info "Orphan process detection started (threshold: running ${min_hours} hours or more)"
 
@@ -147,6 +166,27 @@ _mac_ops_orphan_action() {
   else
     print -- "report"
   fi
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Resolve the uptime threshold in hours
+# Accepts only a whole number >= 1 (at most 6 digits). Unset/empty means the
+# default 24. Anything else (abc, 0, -5, 24h, 1.5) prints 24 and returns 1 so
+# the caller can warn; the uptime filter is never turned off.
+# Usage: _mac_ops_orphan_min_hours
+# -----------------------------------------------------------------------------
+_mac_ops_orphan_min_hours() {
+  local value="${MAC_OPS_ORPHAN_MIN_RUNNING_HOURS-}"
+  if [[ -z "${value}" ]]; then
+    print -- "24"
+    return 0
+  fi
+  if [[ "${value}" =~ ^[0-9]+$ && ${#value} -le 6 ]] && (( 10#${value} >= 1 )); then
+    print -- "$((10#${value}))"
+    return 0
+  fi
+  print -- "24"
+  return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -305,6 +345,43 @@ _mac_ops_orphan_is_session_exe() {
 }
 
 # -----------------------------------------------------------------------------
+# Internal: Process title of a live PID (`ps -o args=`, empty if gone)
+# Only used to protect a pm2 God daemon, never to make a process a candidate.
+# Usage: _mac_ops_orphan_title <pid>
+# -----------------------------------------------------------------------------
+_mac_ops_orphan_title() {
+  ps -o args= -p "${1}" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Is the executable a user daemon started on purpose?
+# Exact, case-insensitive match of the executable base name against
+# _MAC_OPS_ORPHAN_USER_DAEMONS. A process whose executable or title starts
+# with "PM2" is a pm2 God daemon (pm2 runs it as node with that title).
+# Return 0 if yes; _MAC_OPS_ORPHAN_REASON says which rule matched.
+# Usage: _mac_ops_orphan_is_user_daemon <executable_path> [process_title]
+# -----------------------------------------------------------------------------
+_mac_ops_orphan_is_user_daemon() {
+  local exe="${1}" title="${2:-}"
+  typeset -l base="${exe##*/}"
+  local pattern=""
+
+  if [[ "${exe}" == [Pp][Mm]2* || "${title}" == [Pp][Mm]2* ]]; then
+    _MAC_OPS_ORPHAN_REASON="user daemon: pm2 God daemon (process title starts with PM2)"
+    return 0
+  fi
+
+  for pattern in "${_MAC_OPS_ORPHAN_USER_DAEMONS[@]}"; do
+    # ${~pattern}: let qemu-system-* / jupyter* act as patterns
+    if [[ "${base}" == ${~pattern} ]]; then
+      _MAC_OPS_ORPHAN_REASON="user daemon started on purpose (${base})"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# -----------------------------------------------------------------------------
 # Internal: Is the PID, an ancestor or a descendant a live session?
 # Session = terminal / shell / tmux / coding agent executable, or (for the
 # PID's descendants) a process with a controlling tty.
@@ -441,7 +518,8 @@ _mac_ops_orphan_exe_filtered() {
 _mac_ops_orphan_classify() {
   local pid="${1}"
   local exe="${_MAC_OPS_ORPHAN_EXE[${pid}]}"
-  local min_hours="${MAC_OPS_ORPHAN_MIN_RUNNING_HOURS}"
+  local min_hours=""
+  min_hours=$(_mac_ops_orphan_min_hours)
 
   _MAC_OPS_ORPHAN_REASON=""
   _MAC_OPS_ORPHAN_CHECKS=""
@@ -492,6 +570,24 @@ _mac_ops_orphan_classify() {
     return 1
   fi
 
+  # Something still depends on a process that has children
+  local first_kid="${${_MAC_OPS_ORPHAN_KIDS[${pid}]}%%$'\n'*}"
+  if [[ -n "${first_kid}" ]]; then
+    _MAC_OPS_ORPHAN_REASON="has child process PID ${first_kid}"
+    return 1
+  fi
+
+  # Sets _MAC_OPS_ORPHAN_REASON on match. The title is read only for node,
+  # because a pm2 God daemon runs as node with a "PM2 ..." title.
+  local title=""
+  typeset -l lower_base="${exe##*/}"
+  if [[ "${lower_base}" == node || "${lower_base}" == node[0-9]* ]]; then
+    title=$(_mac_ops_orphan_title "${pid}")
+  fi
+  if _mac_ops_orphan_is_user_daemon "${exe}" "${title}"; then
+    return 1
+  fi
+
   # Sets _MAC_OPS_ORPHAN_REASON on match
   if _mac_ops_orphan_exe_filtered "${exe}"; then
     return 1
@@ -508,7 +604,7 @@ _mac_ops_orphan_classify() {
     return 1
   fi
 
-  _MAC_OPS_ORPHAN_CHECKS="not in own process tree; not security software; parent is PID 1; owned by current user; not launchd-managed; no controlling tty; not inside a .app bundle; no terminal/shell/tmux/agent relative; not system/protected/ignored; running ${running_hours}h >= ${min_hours}h"
+  _MAC_OPS_ORPHAN_CHECKS="not in own process tree; not security software; parent is PID 1; owned by current user; not launchd-managed; no controlling tty; not inside a .app bundle; no terminal/shell/tmux/agent relative; no child process; not a user daemon; not system/protected/ignored; running ${running_hours}h >= ${min_hours}h"
   return 0
 }
 
@@ -542,7 +638,61 @@ _mac_ops_orphan_verify() {
   now_exe=$(_mac_ops_orphan_exe "${pid}")
   [[ -n "${now_exe}" && "${now_exe}" == "${recorded_exe}" ]] || return 1
 
+  # Same process; does it still qualify? Reclassify it on a fresh row.
+  _mac_ops_orphan_reclassify "${pid}" "${recorded_exe}" || return 5
+
   return 0
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Fresh `ps` row / children of a live PID (read-only, empty if gone)
+# Row format: pid ppid uid tty etime rss comm
+# Usage: _mac_ops_orphan_fresh_row <pid> ; _mac_ops_orphan_fresh_kids <pid>
+# -----------------------------------------------------------------------------
+_mac_ops_orphan_fresh_row() {
+  ps -o pid=,ppid=,uid=,tty=,etime=,rss=,comm= -p "${1}" 2>/dev/null
+}
+
+_mac_ops_orphan_fresh_kids() {
+  pgrep -P "${1}" 2>/dev/null
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Replace the snapshot entry of a PID with a fresh row (and its
+# current children, and the current launchd list), then run the full
+# classification on it again.
+# Return 0 if it is still a candidate; _MAC_OPS_ORPHAN_REASON says why not.
+# Usage: _mac_ops_orphan_reclassify <pid> <recorded_executable>
+# -----------------------------------------------------------------------------
+_mac_ops_orphan_reclassify() {
+  local pid="${1}" recorded_exe="${2}"
+  local row="" rpid="" ppid="" uid="" tty="" etime="" rss="" comm=""
+  local kids="" kid=""
+
+  row=$(_mac_ops_orphan_fresh_row "${pid}")
+  row="${row%%$'\n'*}"
+  read -r rpid ppid uid tty etime rss comm <<< "${row}"
+  if [[ "${rpid}" != "${pid}" || ! "${ppid}" =~ ^[0-9]+$ || "${comm}" != "${recorded_exe}" ]]; then
+    _MAC_OPS_ORPHAN_REASON="no fresh process table row with the recorded executable"
+    return 1
+  fi
+
+  _MAC_OPS_ORPHAN_PPID[${pid}]="${ppid}"
+  _MAC_OPS_ORPHAN_UID[${pid}]="${uid}"
+  _MAC_OPS_ORPHAN_TTY[${pid}]="${tty}"
+  _MAC_OPS_ORPHAN_ETIME[${pid}]="${etime}"
+  _MAC_OPS_ORPHAN_RSS[${pid}]="${rss}"
+  _MAC_OPS_ORPHAN_EXE[${pid}]="${comm}"
+
+  while IFS= read -r kid; do
+    [[ "${kid}" =~ ^[0-9]+$ ]] && kids+="${kid}"$'\n'
+  done <<< "$(_mac_ops_orphan_fresh_kids "${pid}")"
+  _MAC_OPS_ORPHAN_KIDS[${pid}]="${kids}"
+
+  _mac_ops_orphan_load_launchd
+
+  _mac_ops_orphan_classify "${pid}"
 }
 
 # -----------------------------------------------------------------------------
@@ -582,12 +732,17 @@ _mac_ops_orphan_terminate() {
     return 3
   fi
 
-  if ! _mac_ops_orphan_verify "${pid}" "${recorded_lstart}" "${recorded_exe}"; then
+  _mac_ops_orphan_verify "${pid}" "${recorded_lstart}" "${recorded_exe}"
+  local verify_rc=$?
+  if [[ ${verify_rc} -eq 5 ]]; then
+    mac_ops_log_warn "Orphan process candidate PID ${pid} (${recorded_exe}): refused, it no longer qualifies on a fresh process table row: ${_MAC_OPS_ORPHAN_REASON}"
+    return 1
+  elif [[ ${verify_rc} -ne 0 ]]; then
     mac_ops_log_warn "Orphan process candidate PID ${pid} (${recorded_exe}): refused, it is gone or no longer the listed process (start time/executable changed)"
     return 1
   fi
 
-  mac_ops_log_info "Sending SIGTERM to orphan process candidate PID ${pid} (${recorded_exe}); re-check passed: same start time (${recorded_lstart}), same executable"
+  mac_ops_log_info "Sending SIGTERM to orphan process candidate PID ${pid} (${recorded_exe}); re-check passed: same start time (${recorded_lstart}), same executable, still a candidate on a fresh row"
   if _mac_ops_orphan_signal_term "${pid}"; then
     return 0
   fi

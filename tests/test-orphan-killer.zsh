@@ -111,6 +111,14 @@ _mac_ops_orphan_signal_term() {
     return 0
 }
 
+# --- Process titles come from this map, never from the live table, so a real
+# PID that happens to equal a synthetic PID cannot change a result ---
+typeset -gA TEST_TITLES
+TEST_TITLES=()
+_mac_ops_orphan_title() {
+    print -r -- "${TEST_TITLES[${1}]:-${_MAC_OPS_ORPHAN_EXE[${1}]}}"
+}
+
 # --- Synthetic process table: pid ppid uid tty etime rss comm ---
 OTHER_UID=$((UID + 1))
 SYNTH_TABLE="
@@ -226,11 +234,13 @@ assert_output_contains "${_MAC_OPS_ORPHAN_REASON}" "own process tree" "parent-1 
 _mac_ops_orphan_in_own_tree 700
 assert_exit_code "$?" "1" "unrelated PID 700 is not in the own process tree"
 
-# Same table seen from an unrelated shell: 400 now qualifies, so the own-tree
-# check above is what excluded it
+# Same table seen from an unrelated shell: 400 is no longer rejected by the
+# own-tree check (it is still rejected, because it has a child process)
 load_synthetic 99999
 _mac_ops_orphan_classify 400
-assert_exit_code "$?" "0" "same parent-1 process is a candidate when it is not our ancestor"
+assert_exit_code "$?" "1" "parent-1 process with children is not a candidate even when it is not our ancestor"
+assert_output_not_contains "${_MAC_OPS_ORPHAN_REASON}" "own process tree" "unrelated shell: 400 is not rejected by the own-tree check"
+assert_output_contains "${_MAC_OPS_ORPHAN_REASON}" "has child process PID 500" "unrelated shell: 400 is rejected because it has a child"
 
 assert_eq "$(_mac_ops_orphan_ancestors 601 | tr '\n' ' ')" "600 500 400 " "ancestors are walked up to PID 1"
 assert_eq "$(_mac_ops_orphan_descendants 400 | tr '\n' ' ')" "500 600 601 " "descendants are walked breadth first"
@@ -300,12 +310,14 @@ _mac_ops_orphan_classify 720
 assert_exit_code "$?" "1" "parent-1 process with a tty-attached descendant is not a candidate"
 assert_output_contains "${_MAC_OPS_ORPHAN_REASON}" "descendant PID 721 has controlling tty" "rejected by the descendant tty check"
 
-# Same rows without a tty qualify, so the tty is what excluded them
+# Same rows without a tty: 710 qualifies, so the tty is what excluded it;
+# 720 is still rejected, now only because it has a child process
 _mac_ops_orphan_load_snapshot "${SYNTH_TABLE//ttys00[0-9]/??}" 500
 _mac_ops_orphan_classify 710
 assert_exit_code "$?" "0" "same process without a tty is a candidate"
 _mac_ops_orphan_classify 720
-assert_exit_code "$?" "0" "same process without a tty-attached descendant is a candidate"
+assert_exit_code "$?" "1" "same process without a tty-attached descendant is still not a candidate"
+assert_output_contains "${_MAC_OPS_ORPHAN_REASON}" "has child process PID 721" "720 without a tty child is rejected because it has a child"
 
 _mac_ops_orphan_has_tty "ttys001"
 assert_exit_code "$?" "0" "ttys001 is a controlling tty"
@@ -402,6 +414,129 @@ assert_eq "${_MAC_OPS_ORPHAN_REASON}" "security software" "rejected by the secur
 print ""
 
 # =============================================================================
+# test_user_daemons
+# Long-running tools a user starts on purpose look exactly like orphans
+# (parent 1, no tty, days of uptime). They must never be candidates.
+# =============================================================================
+print "[TEST] test_user_daemons"
+
+# Control row: the same shape with an unknown tool name is a candidate, so the
+# daemon name is what rejects each row below
+_mac_ops_orphan_load_snapshot "
+1 0 0 ?? 9-00:00:00 1000 /sbin/launchd
+900 1 ${UID} ?? 3-00:00:00 100 /opt/homebrew/bin/some-tool
+" 99999
+# Header-only list: no launchd-managed PIDs (an empty argument reads the live list)
+_mac_ops_orphan_load_launchd "PID	Status	Label"
+_mac_ops_orphan_classify 900
+assert_exit_code "$?" "0" "control: unknown parent-1 tool running 3 days is a candidate"
+
+for _daemon in gpg-agent ssh-agent ollama limactl colima qemu-system-aarch64 qemu-system-x86_64 \
+    pm2 emacs tmux screen mosh-server syncthing rclone cloudflared ngrok tailscaled \
+    postgres mysqld mariadbd redis-server mongod nginx httpd caddy dockerd containerd \
+    podman jupyter jupyter-lab jupyter-notebook code-server GPG-Agent; do
+    _mac_ops_orphan_load_snapshot "
+1 0 0 ?? 9-00:00:00 1000 /sbin/launchd
+900 1 ${UID} ?? 3-00:00:00 100 /opt/homebrew/bin/${_daemon}
+" 99999
+    _mac_ops_orphan_classify 900
+    assert_exit_code "$?" "1" "user daemon is not a candidate: ${_daemon}"
+    # tmux/screen/mosh-server/ssh-agent are also sessions; that check runs first
+    if ! _mac_ops_orphan_is_session_exe "/opt/homebrew/bin/${_daemon}"; then
+        assert_output_contains "${_MAC_OPS_ORPHAN_REASON}" "user daemon" "user daemon rejected by the daemon list: ${_daemon}"
+    fi
+    _mac_ops_orphan_is_user_daemon "/opt/homebrew/bin/${_daemon}" "/opt/homebrew/bin/${_daemon}"
+    assert_exit_code "$?" "0" "daemon list matches the base name: ${_daemon}"
+done
+
+# Names are compared as whole base names, not substrings
+for _exe in /opt/tools/bin/nginx-log-tail /opt/tools/bin/my-ollama-notes /opt/tools/bin/postgresql-backup-report; do
+    _mac_ops_orphan_is_user_daemon "${_exe}" "${_exe}"
+    assert_exit_code "$?" "1" "not a user daemon (substring only): ${_exe}"
+done
+
+# limactl with a qemu child, rejected no matter which check fires first
+_mac_ops_orphan_load_snapshot "
+1 0 0 ?? 9-00:00:00 1000 /sbin/launchd
+910 1 ${UID} ?? 3-00:00:00 100 /opt/homebrew/bin/limactl
+911 910 ${UID} ?? 3-00:00:00 100 /opt/homebrew/bin/qemu-system-aarch64
+" 99999
+_mac_ops_orphan_classify 910
+assert_exit_code "$?" "1" "limactl with a qemu child is not a candidate"
+
+# node: a pm2 God daemon (title starts with PM2) is protected, a bare node is not
+_mac_ops_orphan_load_snapshot "
+1 0 0 ?? 9-00:00:00 1000 /sbin/launchd
+920 1 ${UID} ?? 3-00:00:00 100 /opt/homebrew/bin/node
+921 1 ${UID} ?? 3-00:00:00 100 /opt/homebrew/bin/node
+922 1 ${UID} ?? 3-00:00:00 100 PM2 v5.4.2: God Daemon (/Users/me/.pm2)
+" 99999
+TEST_TITLES=(920 "PM2 v5.4.2: God Daemon (/Users/me/.pm2)" 921 "/opt/homebrew/bin/node /Users/me/app/server.js")
+_mac_ops_orphan_classify 920
+assert_exit_code "$?" "1" "node whose process title starts with PM2 is not a candidate"
+assert_output_contains "${_MAC_OPS_ORPHAN_REASON}" "pm2" "pm2 God daemon is rejected as a pm2 daemon"
+_mac_ops_orphan_classify 921
+assert_exit_code "$?" "0" "bare node without a PM2 title is still judged by the other rules"
+_mac_ops_orphan_classify 922
+assert_exit_code "$?" "1" "executable reported as the PM2 title is not a candidate"
+TEST_TITLES=()
+
+print ""
+
+# =============================================================================
+# test_child_process_rule
+# =============================================================================
+print "[TEST] test_child_process_rule"
+
+_mac_ops_orphan_load_snapshot "
+1 0 0 ?? 9-00:00:00 1000 /sbin/launchd
+930 1 ${UID} ?? 3-00:00:00 100 /opt/tools/bin/parentd
+931 930 ${UID} ?? 3-00:00:00 100 /opt/tools/bin/kid
+940 1 ${UID} ?? 3-00:00:00 100 /opt/tools/bin/parentd
+" 99999
+_mac_ops_orphan_classify 930
+assert_exit_code "$?" "1" "parent-1 process with a child is not a candidate"
+assert_output_contains "${_MAC_OPS_ORPHAN_REASON}" "has child process PID 931" "rejected because something depends on it"
+_mac_ops_orphan_classify 940
+assert_exit_code "$?" "0" "same executable without a child is a candidate"
+
+print ""
+
+# =============================================================================
+# test_min_hours_validation
+# =============================================================================
+print "[TEST] test_min_hours_validation"
+
+_mac_ops_orphan_load_snapshot "
+1 0 0 ?? 9-00:00:00 1000 /sbin/launchd
+950 1 ${UID} ?? 01:00:00 100 /opt/tools/bin/young
+951 1 ${UID} ?? 2-00:00:00 100 /opt/tools/bin/older
+" 99999
+
+for _hours in abc 0 -5 24h 00 " " "1.5" "99999999999999999999"; do
+    assert_eq "$(MAC_OPS_ORPHAN_MIN_RUNNING_HOURS="${_hours}" _mac_ops_orphan_min_hours 2>/dev/null)" "24" "invalid hours '${_hours}' falls back to 24"
+    MAC_OPS_ORPHAN_MIN_RUNNING_HOURS="${_hours}" _mac_ops_orphan_min_hours >/dev/null 2>&1
+    assert_exit_code "$?" "1" "invalid hours '${_hours}' is reported as invalid"
+    _HOURS_ERR=$(MAC_OPS_ORPHAN_MIN_RUNNING_HOURS="${_hours}" _mac_ops_orphan_classify 950 2>&1)
+    assert_output_not_contains "${_HOURS_ERR}" "bad math" "invalid hours '${_hours}' causes no math error"
+    MAC_OPS_ORPHAN_MIN_RUNNING_HOURS="${_hours}" _mac_ops_orphan_classify 950 2>/dev/null
+    assert_exit_code "$?" "1" "invalid hours '${_hours}' keeps the uptime filter on (1h process rejected)"
+    assert_output_contains "${_MAC_OPS_ORPHAN_REASON}" "below the 24h threshold" "invalid hours '${_hours}' uses the 24h threshold"
+done
+
+for _hours in 1 24 48 08; do
+    assert_eq "$(MAC_OPS_ORPHAN_MIN_RUNNING_HOURS="${_hours}" _mac_ops_orphan_min_hours)" "$((10#${_hours}))" "valid hours '${_hours}' is used"
+done
+MAC_OPS_ORPHAN_MIN_RUNNING_HOURS=1 _mac_ops_orphan_classify 950
+assert_exit_code "$?" "0" "hours 1: a 1h-old process is a candidate"
+MAC_OPS_ORPHAN_MIN_RUNNING_HOURS=48 _mac_ops_orphan_classify 951
+assert_exit_code "$?" "0" "hours 48: a 48h-old process is a candidate"
+MAC_OPS_ORPHAN_MIN_RUNNING_HOURS=49 _mac_ops_orphan_classify 951
+assert_exit_code "$?" "1" "hours 49: a 48h-old process is not a candidate"
+
+print ""
+
+# =============================================================================
 # test_stale_pid_recheck
 # =============================================================================
 print "[TEST] test_stale_pid_recheck"
@@ -417,7 +552,7 @@ assert_eq "$([[ -n "${STALE_LSTART}" ]] && print yes)" "yes" "start time of the 
 assert_output_contains "${STALE_EXE}" "sleep" "executable of the test sleep is recorded"
 
 _mac_ops_orphan_verify "${STALE_PID}" "${STALE_LSTART}" "${STALE_EXE}"
-assert_exit_code "$?" "0" "live process with the same start time and executable verifies"
+assert_exit_code "$?" "5" "same start time and executable pass the identity check, then the fresh row is reclassified (our own child: not a candidate)"
 _mac_ops_orphan_verify "${STALE_PID}" "Thu Jan  1 00:00:00 1970" "${STALE_EXE}"
 assert_exit_code "$?" "1" "different start time does not verify"
 _mac_ops_orphan_verify "${STALE_PID}" "${STALE_LSTART}" "/opt/tools/bin/other"
@@ -445,9 +580,68 @@ _mac_ops_orphan_terminate "$$" "${STALE_LSTART}" "${STALE_EXE}" >/dev/null 2>&1
 assert_exit_code "$?" "1" "term mode refuses the current shell"
 assert_eq "${#SIGNAL_CALLS[@]}" "0" "no signal for refused entries"
 
-_mac_ops_orphan_terminate "${STALE_PID}" "${STALE_LSTART}" "${STALE_EXE}" >/dev/null 2>&1
-assert_exit_code "$?" "0" "term mode accepts a live entry that still matches"
+# The test sleep is really a child of this shell running /bin/sleep, so it
+# would never classify as a candidate. To exercise the accept path, the fresh
+# row and children used by the re-check are stubbed to describe it as a
+# parent-1 tool; its start time is still read from the live table.
+functions[_test_orig_exe]="${functions[_mac_ops_orphan_exe]}"
+_mac_ops_orphan_exe() {
+    if [[ "${1}" == "${STALE_PID}" ]]; then
+        print -- "/opt/tools/bin/test-sleeper"
+    else
+        _test_orig_exe "${1}"
+    fi
+}
+FRESH_PPID=1; FRESH_TTY="??"; FRESH_ETIME="2-00:00:00"; FRESH_KIDS=""; FRESH_GONE=false
+_mac_ops_orphan_fresh_row() {
+    [[ "${FRESH_GONE}" == "true" ]] && return 0
+    print -r -- "${1} ${FRESH_PPID} ${UID} ${FRESH_TTY} ${FRESH_ETIME} 100 /opt/tools/bin/test-sleeper"
+}
+_mac_ops_orphan_fresh_kids() {
+    [[ -n "${FRESH_KIDS}" ]] && print -r -- "${FRESH_KIDS}"
+    return 0
+}
+load_synthetic 500
+functions[_test_orig_load_launchd_pre]="${functions[_mac_ops_orphan_load_launchd]}"
+_mac_ops_orphan_load_launchd() { return 0 }
+_MAC_OPS_ORPHAN_LAUNCHD_PIDS=()
+_MAC_OPS_ORPHAN_LAUNCHD_LABELS=""
+STUB_EXE="/opt/tools/bin/test-sleeper"
+
+_mac_ops_orphan_terminate "${STALE_PID}" "${STALE_LSTART}" "${STUB_EXE}" >/dev/null 2>&1
+assert_exit_code "$?" "0" "term mode accepts a live entry that still matches and still qualifies"
 assert_eq "${SIGNAL_CALLS[*]}" "${STALE_PID}" "exactly one TERM requested, for the verified PID"
+
+# Same PID, same start time and executable, but the fresh row no longer
+# qualifies: the signal must be refused
+SIGNAL_CALLS=()
+for _case in tty parent child young gone; do
+    FRESH_PPID=1; FRESH_TTY="??"; FRESH_ETIME="2-00:00:00"; FRESH_KIDS=""; FRESH_GONE=false
+    case "${_case}" in
+        tty)    FRESH_TTY="ttys009" ;;
+        parent) FRESH_PPID=700 ;;
+        child)  FRESH_KIDS="4242" ;;
+        young)  FRESH_ETIME="00:10" ;;
+        gone)   FRESH_GONE=true ;;
+    esac
+    _RECHECK_OUT=$(_mac_ops_orphan_terminate "${STALE_PID}" "${STALE_LSTART}" "${STUB_EXE}" 2>&1)
+    assert_exit_code "$?" "1" "re-check refuses a PID whose fresh row no longer qualifies (${_case})"
+    assert_output_contains "${_RECHECK_OUT}" "no longer" "refusal after re-classification is logged (${_case})"
+done
+_mac_ops_orphan_terminate "${STALE_PID}" "${STALE_LSTART}" "${STUB_EXE}" >/dev/null 2>&1
+assert_eq "${#SIGNAL_CALLS[@]}" "0" "no signal for entries that no longer qualify"
+
+# The full classification runs again, so a rule that changed since the
+# listing (here: a new ignore entry) also refuses the signal
+FRESH_PPID=1; FRESH_TTY="??"; FRESH_ETIME="2-00:00:00"; FRESH_KIDS=""; FRESH_GONE=false
+_MAC_OPS_IGNORE_PROCESSES=("test-sleeper")
+_mac_ops_orphan_terminate "${STALE_PID}" "${STALE_LSTART}" "${STUB_EXE}" >/dev/null 2>&1
+assert_exit_code "$?" "1" "re-check applies the ignore rules again"
+_MAC_OPS_IGNORE_PROCESSES=()
+assert_eq "${#SIGNAL_CALLS[@]}" "0" "no signal after an ignore rule was added"
+
+functions[_mac_ops_orphan_exe]="${functions[_test_orig_exe]}"
+functions[_mac_ops_orphan_load_launchd]="${functions[_test_orig_load_launchd_pre]}"
 
 # Now end our own sleep and confirm the recorded entry is refused
 SIGNAL_CALLS=()
@@ -510,6 +704,13 @@ for _rejected in 400 705 710 720 730 740 745 750 760 770 780 795; do
     assert_output_not_contains "${RUN_OUTPUT}" "candidate: PID ${_rejected} " "PID ${_rejected} is not reported"
 done
 assert_output_not_contains "${RUN_OUTPUT}" "SIGTERM to" "report mode does not announce any signal"
+
+# An invalid hours value is warned about and replaced by 24 for the whole run
+RUN_OUTPUT=$(MAC_OPS_ORPHAN_MIN_RUNNING_HOURS=abc mac_ops_orphan_killer 2>&1)
+assert_output_contains "${RUN_OUTPUT}" "MAC_OPS_ORPHAN_MIN_RUNNING_HOURS='abc'" "invalid hours value is warned about"
+assert_output_contains "${RUN_OUTPUT}" "threshold: running 24 hours or more" "invalid hours value runs with the 24h threshold"
+assert_output_not_contains "${RUN_OUTPUT}" "candidate: PID 705 " "invalid hours value does not turn the uptime filter off"
+assert_output_contains "${RUN_OUTPUT}" "2 candidates reported out of 14 parent-1 processes" "invalid hours value finds the same candidates as 24"
 
 MAC_OPS_ORPHAN_ACTION=term
 mac_ops_orphan_killer > "${TEST_TMPDIR}/term-run.log" 2>&1
