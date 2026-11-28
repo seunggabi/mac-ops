@@ -802,6 +802,91 @@ test_failure_notification() {
 test_failure_notification
 unset -f osascript
 
+# =============================================================================
+# Run lock and exit handling: the lock is held for the whole run and every
+# way a run ends (normal, ERR_EXIT abort, TERM) finishes it once
+# =============================================================================
+print "[TEST] run_lock_and_exit_handling"
+
+# Run snippet in a fresh zsh under ERR_EXIT with lock/run/notify loaded and
+# osascript replaced by a recording stub (never the real one)
+_ta_run() {
+    fx_zsh MAC_OPS_SCHEDULED=true -- "
+        source \"\${MAC_OPS_ROOT}/lib/core/lock.zsh\"
+        source \"\${MAC_OPS_ROOT}/lib/core/run.zsh\"
+        source \"\${MAC_OPS_ROOT}/lib/utils/format.zsh\"
+        source \"\${MAC_OPS_ROOT}/lib/utils/notify.zsh\"
+        osascript() { print -r -- \"\$*\" >> '${FX_OPS}/osa.calls'; }
+        mac_ops_init_dirs
+        mac_ops_run_start
+        mac_ops_setup_trap
+        mac_ops_acquire_lock
+        _MAC_OPS_RUN_LOCKED=true
+        $1"
+}
+TA_LOG="${FX_OPS}/.logs/mac-ops.log"
+
+test_run_lock_held() {
+    reset_fixture
+    local out
+    out=$(_ta_run 'f() { return 0; }; f
+        [[ -f "${MAC_OPS_LOCK_FILE}" ]] && print "LOCK_HELD_AFTER_SETUP"
+        mac_ops_run_finish 0
+        [[ -f "${MAC_OPS_LOCK_FILE}" ]] || print "LOCK_RELEASED_AT_FINISH"' 2>&1)
+    assert_output_contains "${out}" "LOCK_HELD_AFTER_SETUP" "lock still held after mac_ops_setup_trap returns"
+    assert_output_contains "${out}" "LOCK_RELEASED_AT_FINISH" "lock released by mac_ops_run_finish"
+    assert_output_not_contains "$(cat "${TA_LOG}" 2>/dev/null)" "[WARN]" "normal run: no spurious WARN"
+    assert_output_not_contains "$(cat "${TA_LOG}" 2>/dev/null)" "aborted" "normal run: not logged as aborted"
+    assert_output_not_contains "$(cat "${FX_OPS}/osa.calls" 2>/dev/null)" "Run failed" "normal run: no failure notification"
+}
+
+test_run_errexit_abort() {
+    reset_fixture
+    local rc=0
+    _ta_run 'g() { false; print "NOT_REACHED"; }; g' >/dev/null 2>&1 || rc=$?
+    assert_eq "${rc}" "1" "ERR_EXIT abort: exit status 1"
+    assert_eq "$([[ -e "${FX_OPS}/mac-ops.lock" ]] && print held || print released)" "released" "ERR_EXIT abort: lock released"
+    assert_output_contains "$(cat "${TA_LOG}" 2>/dev/null)" "Run aborted (command failed, exit status 1)" "ERR_EXIT abort: failure logged"
+    assert_output_contains "$(cat "${FX_OPS}/osa.calls" 2>/dev/null)" "Run failed (exit status 1)" "ERR_EXIT abort: scheduled failure notification sent"
+}
+
+test_run_errexit_ignored_where_off() {
+    reset_fixture
+    local out
+    out=$(_ta_run 'h() { setopt LOCAL_OPTIONS NO_ERR_EXIT; false; print "H_CONTINUES"; }; h
+        ( false ) || true
+        [[ -f "${MAC_OPS_LOCK_FILE}" ]] && print "LOCK_STILL_HELD"
+        mac_ops_run_finish 0' 2>&1)
+    assert_output_contains "${out}" "H_CONTINUES" "failure in a NO_ERR_EXIT function does not abort"
+    assert_output_contains "${out}" "LOCK_STILL_HELD" "failure in NO_ERR_EXIT function / subshell keeps the lock"
+    assert_output_not_contains "$(cat "${TA_LOG}" 2>/dev/null)" "aborted" "no abort logged for handled failures"
+}
+
+test_run_term_signal() {
+    reset_fixture
+    local rc=0
+    _ta_run 'kill -TERM $$; sleep 1; print "NOT_REACHED"' >/dev/null 2>&1 || rc=$?
+    assert_eq "${rc}" "143" "TERM: exit status 143"
+    assert_eq "$([[ -e "${FX_OPS}/mac-ops.lock" ]] && print held || print released)" "released" "TERM: lock released"
+    assert_output_contains "$(cat "${TA_LOG}" 2>/dev/null)" "Run aborted (signal TERM, exit status 143)" "TERM: logged once"
+    assert_eq "$(grep -c "Run aborted" "${TA_LOG}" 2>/dev/null)" "1" "TERM: finished exactly once"
+    assert_output_contains "$(cat "${FX_OPS}/osa.calls" 2>/dev/null)" "Run failed (exit status 143)" "TERM: scheduled failure notification sent"
+}
+
+test_run_explicit_exit() {
+    reset_fixture
+    local rc=0
+    _ta_run 'exit 3' >/dev/null 2>&1 || rc=$?
+    assert_eq "${rc}" "3" "explicit exit: status kept"
+    assert_eq "$([[ -e "${FX_OPS}/mac-ops.lock" ]] && print held || print released)" "released" "explicit exit: lock released"
+}
+
+test_run_lock_held
+test_run_errexit_abort
+test_run_errexit_ignored_where_off
+test_run_term_signal
+test_run_explicit_exit
+
 # --- Teardown ---
 rm -rf "${TEST_TMPDIR}"
 

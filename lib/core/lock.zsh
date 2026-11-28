@@ -63,28 +63,18 @@ mac_ops_release_lock() {
 }
 
 # -----------------------------------------------------------------------------
-# Set up signal trap
-# Register cleanup function for SIGTERM, SIGINT, SIGHUP, EXIT
+# Set up the run's exit handling (handlers in run.zsh)
+# A "trap ... EXIT" set inside a function fires when that function returns,
+# which released the lock right after it was taken. Signal and ZERR traps
+# set here stay global; an explicit exit is caught by the zshexit hook and an
+# ERR_EXIT abort by ZERR (zsh runs no EXIT trap or zshexit in that case).
 # -----------------------------------------------------------------------------
 mac_ops_setup_trap() {
-  trap '_mac_ops_cleanup_on_signal' TERM INT HUP EXIT
-}
-
-# -----------------------------------------------------------------------------
-# Cleanup function on signal reception (internal)
-# Release lock + log ongoing work
-# -----------------------------------------------------------------------------
-_mac_ops_cleanup_on_signal() {
-  # Prevent duplicate execution (EXIT trap also fires after other signals)
-  if [[ "${_MAC_OPS_CLEANUP_DONE:-false}" == "true" ]]; then
-    return 0
+  trap '_mac_ops_on_signal HUP 129' HUP
+  trap '_mac_ops_on_signal INT 130' INT
+  trap '_mac_ops_on_signal TERM 143' TERM
+  trap '_mac_ops_on_zerr $?' ZERR
+  if [[ "${zshexit_functions[(Ie)_mac_ops_on_exit]:-0}" == "0" ]]; then
+    zshexit_functions+=(_mac_ops_on_exit)
   fi
-  _MAC_OPS_CLEANUP_DONE=true
-
-  mac_ops_log_warn "Signal received: starting cleanup (PID: $$)"
-
-  # Release lock
-  mac_ops_release_lock
-
-  mac_ops_log_info "Cleanup completed"
 }

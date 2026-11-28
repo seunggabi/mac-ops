@@ -16,6 +16,7 @@ MAC_OPS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "${MAC_OPS_ROOT}/lib/core/config.zsh"
 source "${MAC_OPS_ROOT}/lib/core/logger.zsh"
 source "${MAC_OPS_ROOT}/lib/core/lock.zsh"
+source "${MAC_OPS_ROOT}/lib/core/run.zsh"
 source "${MAC_OPS_ROOT}/lib/core/trash.zsh"
 source "${MAC_OPS_ROOT}/lib/core/safety.zsh"
 source "${MAC_OPS_ROOT}/lib/core/ignore.zsh"
@@ -114,30 +115,28 @@ _mac_ops_cmd_run() {
   # 1. Initialize directories
   mac_ops_init_dirs
 
-  # Log position at run start: ERROR/WARN lines after it are counted for the
-  # end-of-run notification (a failed run is notified in scheduled mode)
-  local log_start
-  mac_ops_log_line_count; log_start="${REPLY}"
+  # 2. Run ID, start time and log position. From here every exit path ends in
+  #    mac_ops_run_finish: the returns below, ERR_EXIT and INT/TERM/HUP
+  mac_ops_run_start
+  mac_ops_setup_trap
 
-  # 2. Load configuration
+  # 3. Load configuration
   if ! mac_ops_load_config; then
-    mac_ops_notify_run_end "${log_start}" 1
+    mac_ops_run_finish 1
     return 1
   fi
 
-  # 3. Log rotation
+  # 4. Log rotation
   mac_ops_log_rotate
-  mac_ops_log_line_count; log_start="${REPLY}"
+  mac_ops_log_line_count; MAC_OPS_RUN_LOG_START="${REPLY}"
 
-  # 4. Acquire lock - exit on failure
+  # 5. Acquire lock - exit on failure (held until mac_ops_run_finish)
   if ! mac_ops_acquire_lock; then
     mac_ops_log_error "Another mac-ops instance is already running. Exiting."
-    mac_ops_notify_run_end "${log_start}" 1
+    mac_ops_run_finish 1
     return 1
   fi
-
-  # 5. Setup trap
-  mac_ops_setup_trap
+  _MAC_OPS_RUN_LOCKED=true
 
   # 6. Emergency purge on disk danger
   mac_ops_emergency_purge || true
@@ -152,43 +151,35 @@ _mac_ops_cmd_run() {
   MAC_OPS_KILLED_COUNT=0
   MAC_OPS_DATA_MOVED_COUNT=0
 
-  # Temporary directory for statistics collection
-  local stats_dir="${MAC_OPS_HOME}/.tmp/stats_$$"
-  mkdir -p "${stats_dir}" 2>/dev/null
+  # Temporary directory for statistics collection (removed by mac_ops_run_finish)
+  MAC_OPS_RUN_STATS_DIR="${MAC_OPS_HOME}/.tmp/stats_$$"
+  mkdir -p "${MAC_OPS_RUN_STATS_DIR}" 2>/dev/null
 
   # 9. Load user ignore rules (before any module runs)
   mac_ops_ignore_load
 
   # 10. Module execution (enabled modules only; --module runs one explicitly)
-  if ! mac_ops_run_modules "${target_module}" "${stats_dir}"; then
-    [[ -n "${stats_dir}" && "${stats_dir}" == *"/stats_"* ]] && rm -rf "${stats_dir}" 2>/dev/null
-    mac_ops_release_lock
-    mac_ops_notify_run_end "${log_start}" 1
+  if ! mac_ops_run_modules "${target_module}" "${MAC_OPS_RUN_STATS_DIR}"; then
+    mac_ops_run_finish 1
     return 1
   fi
 
-  # Cleanup statistics temporary directory (guard: must match expected path pattern)
-  [[ -n "${stats_dir}" && "${stats_dir}" == *"/stats_"* ]] && rm -rf "${stats_dir}" 2>/dev/null
-
-  # 9. Delete expired files (72 hour threshold)
+  # 11. Delete expired files (72 hour threshold)
   mac_ops_trash_expire || true
 
-  # 10. Release lock
-  mac_ops_release_lock
-
-  # 11. Take after snapshot
+  # 12. Take after snapshot
   local snapshot_after
   snapshot_after=$(mac_ops_take_snapshot)
 
-  # 12. System report (before/after comparison + cleanup summary)
+  # 13. System report (before/after comparison + cleanup summary)
   mac_ops_print_report "${snapshot_before}" "${snapshot_after}" "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}" "${MAC_OPS_DATA_MOVED_COUNT}"
 
-  # 13. macOS notification (scheduled mode; also when ERRORs were logged)
-  # Free bytes (df -k) are the second snapshot field
+  # 14. Release lock, macOS notification (scheduled mode; also when ERRORs
+  #     were logged). Free bytes (df -k) are the second snapshot field
   local before_free after_free _pct _rest
   read -r _pct before_free _rest <<< "${snapshot_before}"
   read -r _pct after_free _rest <<< "${snapshot_after}"
-  mac_ops_notify_run_end "${log_start}" 0 "${before_free}" "${after_free}"
+  mac_ops_run_finish 0 "${before_free}" "${after_free}"
 }
 
 # =============================================================================
