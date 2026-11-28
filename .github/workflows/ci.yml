@@ -22,6 +22,7 @@ jobs:
           zsh tests/test-orphan-killer.zsh
           zsh tests/test-core-safety.zsh
           zsh tests/test-e2e.zsh
+          zsh tests/test-timeout.zsh
 
   lint:
     runs-on: ubuntu-latest
