@@ -1665,6 +1665,19 @@ test_status_cli_alert() {
     assert_eq "${rc}" "0" "status with a failed scheduled run: exit 0"
     assert_output_contains "${out%%$'\n'*}" "[ALERT] last scheduled run" "status: failed scheduled run alerted on the first line"
     assert_output_contains "${out%%$'\n'*}" "FAILED (exit status 2" "status: failed exit status on the first line"
+
+    # A live run lock older than one interval (hung run), under ERR_EXIT
+    local me_start
+    me_start=$(_tl_start_of $$)
+    print -r -- "$$ ${me_start}" > "${FX_OPS}/mac-ops.lock"
+    touch -t "$(date -v-3H '+%Y%m%d%H%M')" "${FX_OPS}/mac-ops.lock"
+    rc=0
+    out=$(fx_env zsh "${MAC_OPS_ROOT}/bin/mac-ops" status 2>&1) || rc=$?
+    assert_eq "${rc}" "0" "status with a hung run lock: exit 0"
+    assert_output_contains "${out%%$'\n'*}" "a run (PID $$) has held the run lock for 3h" "status: hung run lock alerted on the first line"
+    assert_output_contains "${out}" "Run lock:         held by PID $$ for 3h" "status: run lock holder and age shown"
+    assert_eq "$([[ -e "${FX_OPS}/mac-ops.lock.guard" ]] && print created || print none)" "none" "status creates no lock guard file"
+    rm -f -- "${FX_OPS}/mac-ops.lock"
 }
 
 test_run_restore_nested_order
