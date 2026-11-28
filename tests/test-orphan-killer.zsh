@@ -98,6 +98,7 @@ source "${MAC_OPS_ROOT}/lib/core/config.zsh"
 source "${MAC_OPS_ROOT}/lib/core/logger.zsh"
 source "${MAC_OPS_ROOT}/lib/core/safety.zsh"
 source "${MAC_OPS_ROOT}/lib/core/ignore.zsh"
+source "${MAC_OPS_ROOT}/lib/utils/security-keywords.zsh"
 source "${MODULE_FILE}"
 
 mac_ops_init_dirs
@@ -349,7 +350,7 @@ assert_output_contains "${ARGS_EXE}" "perl" "snapshot records the executable"
 assert_output_not_contains "${ARGS_EXE}" "fortinet" "snapshot does not record the arguments"
 assert_eq "${ARGS_EXE}" "$(_mac_ops_orphan_exe "${ARGS_PID}")" "snapshot executable equals ps -o comm="
 
-_mac_ops_orphan_is_security_software "${ARGS_EXE}"
+_mac_ops_fc_is_security_path "${ARGS_EXE}"
 assert_exit_code "$?" "1" "security keyword in arguments does not match"
 _mac_ops_orphan_is_session_exe "${ARGS_EXE}"
 assert_exit_code "$?" "1" "session name in arguments does not match"
@@ -394,15 +395,15 @@ EXPECTED_KEYWORDS=(
     raon touchen
 )
 
-assert_eq "${#_MAC_OPS_ORPHAN_SECURITY_KEYWORDS[@]}" "${#EXPECTED_KEYWORDS[@]}" "security keyword list has ${#EXPECTED_KEYWORDS[@]} entries"
+assert_eq "${#MAC_OPS_SECURITY_KEYWORDS[@]}" "${#EXPECTED_KEYWORDS[@]}" "security keyword list has ${#EXPECTED_KEYWORDS[@]} entries"
 
 for _keyword in "${EXPECTED_KEYWORDS[@]}"; do
-    _mac_ops_orphan_is_security_software "/Library/Vendor/${(U)_keyword}/bin/agentd"
+    _mac_ops_fc_is_security_path "/Library/Vendor/${(U)_keyword}/bin/agentd"
     assert_exit_code "$?" "0" "security keyword matches case-insensitively: ${_keyword}"
 done
 
 for _exe in "/opt/homebrew/bin/node" "/usr/local/bin/python3" "/opt/tools/bin/supervisor" ""; do
-    _mac_ops_orphan_is_security_software "${_exe}"
+    _mac_ops_fc_is_security_path "${_exe}"
     assert_exit_code "$?" "1" "not security software: '${_exe}'"
 done
 

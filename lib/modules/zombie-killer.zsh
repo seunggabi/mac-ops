@@ -13,7 +13,7 @@
 # Only the exact value "sigchld" signals. Every other value behaves like "report".
 # A parent is never signalled when it is PID 1, an ancestor of this mac-ops run,
 # a protected or user-ignored process, or its executable path contains a
-# security software keyword (MAC_OPS_SECURITY_KEYWORDS, tmp-cleanup.zsh).
+# security software keyword (MAC_OPS_SECURITY_KEYWORDS, lib/utils/security-keywords.zsh).
 
 # zsh-only parameter flags and nested expansions; false positives in bash mode
 # shellcheck disable=SC2296,SC2299

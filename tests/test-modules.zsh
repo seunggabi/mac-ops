@@ -77,6 +77,8 @@ source "${MAC_OPS_ROOT}/lib/core/safety.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/core/disk.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/utils/plist-helper.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/utils/format.zsh" 2>/dev/null || load_error=1
+source "${MAC_OPS_ROOT}/lib/utils/security-keywords.zsh" 2>/dev/null || load_error=1
+source "${MAC_OPS_ROOT}/lib/utils/running.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/utils/parallel.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/modules/cache-cleanup.zsh" 2>/dev/null || load_error=1
 source "${MAC_OPS_ROOT}/lib/modules/tmp-cleanup.zsh" 2>/dev/null || load_error=1
@@ -211,11 +213,11 @@ done
 local _kw_name
 for _kw_name in "com.Fortinet.FortiClient" "com.wizvera.delfino" "net.nprotect.online" \
   "com.example.TouchEnKey" "com.AhnLab.v3" "com.example.ASTxHelper" "kr.veraport.agent" "com.example.PCAssist.agent"; do
-  _mac_ops_is_security_keyword_name "${_kw_name}"
+  _mac_ops_fc_is_security_path "${_kw_name}"
   assert_exit_code "$?" "0" "security keyword name: ${_kw_name}"
 done
 for _kw_name in "com.example.app" "org.mozilla.firefox" "com.macopstest.orphan"; do
-  _mac_ops_is_security_keyword_name "${_kw_name}"
+  _mac_ops_fc_is_security_path "${_kw_name}"
   assert_exit_code "$?" "1" "not a security keyword name: ${_kw_name}"
 done
 
