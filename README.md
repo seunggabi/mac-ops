@@ -73,7 +73,7 @@ Enabled by default: `cache`, `tmp`, `log`, `orphan-app`. The others are off unti
 | Module | Description |
 |--------|-------------|
 | `cache` | Clean `~/Library/Caches` (Apple system caches excluded) |
-| `tmp` | Clean `/private/var/folders` (your T, C and X areas) and CrashReporter. `/tmp` itself is not scanned: the scan root `/tmp` is a symbolic link to `/private/tmp`, which `find` does not follow |
+| `tmp` | Clean `/private/var/folders` (files you own, up to 6 levels deep, in every area of your folder: `T`, `C`, `X` and `0`) and CrashReporter. `/tmp` itself is not scanned: the scan root `/tmp` is a symbolic link to `/private/tmp`, which `find` does not follow |
 | `log` | Clean `~/Library/Logs`, system diagnostic reports |
 | `zombie` | Report zombie processes (opt-in: send SIGCHLD to eligible parents; never SIGTERM/SIGKILL) |
 | `orphan` | Report orphan process candidates (sends SIGTERM only with `MAC_OPS_ORPHAN_ACTION=term`, never SIGKILL) |
