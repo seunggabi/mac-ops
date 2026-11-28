@@ -33,12 +33,8 @@ MAC_OPS_ORPHAN_MIN_RUNNING_HOURS=${MAC_OPS_ORPHAN_MIN_RUNNING_HOURS:-24}
 # SIGKILL is never sent by this module.
 MAC_OPS_ORPHAN_ACTION=${MAC_OPS_ORPHAN_ACTION:-report}
 
-# --- Security software: never signalled (case-insensitive executable path) ---
-_MAC_OPS_ORPHAN_SECURITY_KEYWORDS=(
-  fortinet forticlient ahnlab astx jiran jkok pnpsecure pcassist
-  wizvera delfino veraport iniline crossex initech inisafe nprotect
-  raon touchen
-)
+# Security software (MAC_OPS_SECURITY_KEYWORDS, lib/utils/security-keywords.zsh)
+# is never signalled: case-insensitive substring of the executable path.
 
 # --- User daemons: long-running tools started on purpose, never signalled ---
 # Exact, case-insensitive match on the executable base name. Name families
@@ -310,23 +306,6 @@ _mac_ops_orphan_in_own_tree() {
 }
 
 # -----------------------------------------------------------------------------
-# Internal: Is the executable security software?
-# Case-insensitive substring match on the executable path only.
-# Return 0 if yes
-# Usage: _mac_ops_orphan_is_security_software <executable_path>
-# -----------------------------------------------------------------------------
-_mac_ops_orphan_is_security_software() {
-  typeset -l lower_exe="${1}"
-  local keyword=""
-  for keyword in "${_MAC_OPS_ORPHAN_SECURITY_KEYWORDS[@]}"; do
-    if [[ "${lower_exe}" == *"${keyword}"* ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-# -----------------------------------------------------------------------------
 # Internal: Is the executable a terminal, shell, multiplexer or coding agent?
 # Exact, case-insensitive match on the executable basename (a leading "-" of
 # login shells is ignored). Arguments are never looked at.
@@ -538,7 +517,13 @@ _mac_ops_orphan_classify() {
     return 1
   fi
 
-  if _mac_ops_orphan_is_security_software "${exe}"; then
+  # Fail closed: without the security keyword check (security-keywords.zsh
+  # not loaded) no process is a candidate
+  if ! (( ${+functions[_mac_ops_fc_is_security_path]} )); then
+    _MAC_OPS_ORPHAN_REASON="security software check unavailable"
+    return 1
+  fi
+  if _mac_ops_fc_is_security_path "${exe}"; then
     _MAC_OPS_ORPHAN_REASON="security software"
     return 1
   fi

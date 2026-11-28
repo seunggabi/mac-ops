@@ -16,15 +16,19 @@ MAC_OPS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "${MAC_OPS_ROOT}/lib/core/config.zsh"
 source "${MAC_OPS_ROOT}/lib/core/logger.zsh"
 source "${MAC_OPS_ROOT}/lib/core/lock.zsh"
+source "${MAC_OPS_ROOT}/lib/core/run.zsh"
 source "${MAC_OPS_ROOT}/lib/core/trash.zsh"
 source "${MAC_OPS_ROOT}/lib/core/safety.zsh"
 source "${MAC_OPS_ROOT}/lib/core/ignore.zsh"
 source "${MAC_OPS_ROOT}/lib/core/disk.zsh"
+source "${MAC_OPS_ROOT}/lib/core/dispatch.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/plist-helper.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/format.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/parallel.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/notify.zsh"
 source "${MAC_OPS_ROOT}/lib/utils/snapshot.zsh"
+source "${MAC_OPS_ROOT}/lib/utils/security-keywords.zsh"
+source "${MAC_OPS_ROOT}/lib/utils/running.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/cache-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/tmp-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/log-cleanup.zsh"
@@ -38,19 +42,6 @@ source "${MAC_OPS_ROOT}/lib/modules/browser-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/analyze.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/monitor.zsh"
 
-# --- --dry-run on the command line wins over DryRun in config.plist ---
-# (config.plist is loaded after argument parsing and could reset the flag)
-_MAC_OPS_CLI_DRY_RUN=false
-functions -c mac_ops_load_config _mac_ops_load_config_file
-mac_ops_load_config() {
-  local rc=0
-  _mac_ops_load_config_file "$@" || rc=$?
-  if [[ "${_MAC_OPS_CLI_DRY_RUN}" == "true" ]]; then
-    MAC_OPS_DRY_RUN=true
-  fi
-  return ${rc}
-}
-
 # --- Version (from git tag or VERSION file) ---
 if [[ -d "${MAC_OPS_ROOT}/.git" ]]; then
   # Development mode: use git tag
@@ -62,21 +53,6 @@ elif [[ -f "${MAC_OPS_ROOT}/VERSION" ]]; then
 else
   MAC_OPS_VERSION="unknown"
 fi
-
-# --- Module name -> function name mapping ---
-typeset -A MAC_OPS_MODULE_MAP
-MAC_OPS_MODULE_MAP=(
-  cache       mac_ops_cache_cleanup
-  tmp         mac_ops_tmp_cleanup
-  log         mac_ops_log_cleanup
-  zombie      mac_ops_zombie_killer
-  orphan      mac_ops_orphan_killer
-  orphan-app  mac_ops_orphan_app_cleanup
-  brew        mac_ops_brew_cleanup
-  dev         mac_ops_dev_cleanup
-  docker      mac_ops_docker_cleanup
-  browser     mac_ops_browser_cleanup
-)
 
 # =============================================================================
 # Help
@@ -98,8 +74,13 @@ Commands:
   monitor collect  Record a snapshot (use for scheduled collection)
   monitor setup    Install launchd agent (collect every 5 min)
   monitor unsetup  Uninstall launchd agent
-  status           Show trash status and disk usage
+  status           Show health (last run, its exit status, errors, warnings,
+                   data items moved, agents loaded/overdue), trash and disk
   restore <path>   Restore from trash to original location
+  restore --run <run-id>
+                   Restore every item of one run that is still in the trash
+                   (refuses items whose original location exists again)
+  runs             List recent runs (time, exit status, items, data items)
   list-trash       List trash contents
   purge            Purge expired trash items immediately
   install          Install launchd agent
@@ -117,6 +98,9 @@ Options:
 
 Available modules:
   cache, tmp, log, zombie, orphan, orphan-app, brew, dev, docker, browser
+  A plain run only runs modules enabled in config.plist (Modules.<name>.Enabled)
+  or by MAC_OPS_MODULE_<NAME>_ENABLED=true. Enabled by default: cache, tmp, log,
+  orphan-app. --module=NAME runs that module even when it is disabled.
 HELP
 }
 
@@ -136,20 +120,38 @@ _mac_ops_cmd_run() {
   # 1. Initialize directories
   mac_ops_init_dirs
 
-  # 2. Load configuration
-  mac_ops_load_config
+  # 2. Run ID, start time and log position. From here every exit path ends in
+  #    mac_ops_run_finish: the returns below, ERR_EXIT and INT/TERM/HUP
+  mac_ops_run_start
+  mac_ops_setup_trap
 
-  # 3. Log rotation
-  mac_ops_log_rotate
-
-  # 4. Acquire lock - exit on failure
-  if ! mac_ops_acquire_lock; then
-    mac_ops_log_error "Another mac-ops instance is already running. Exiting."
+  # 3. Load configuration
+  if ! mac_ops_load_config; then
+    mac_ops_run_finish 1
     return 1
   fi
 
-  # 5. Setup trap
-  mac_ops_setup_trap
+  # 4. Log rotation
+  mac_ops_log_rotate
+  mac_ops_log_line_count; MAC_OPS_RUN_LOG_START="${REPLY}"
+
+  # 5. Acquire lock (held until mac_ops_run_finish). Colliding with another
+  #    run (a scheduled run during a manual one) is not a failure: no
+  #    manifest, no notification, exit 0. A lock error is a failed run.
+  local lock_rc=0
+  mac_ops_acquire_lock || lock_rc=$?
+  if [[ "${lock_rc}" == "1" ]]; then
+    # INFO; WARN for a scheduled run when the holder is older than one
+    # interval (it may be hung). Names the holder's PID and the lock age
+    mac_ops_run_log_lock_skip
+    mac_ops_run_discard
+    return 0
+  elif [[ "${lock_rc}" != "0" ]]; then
+    mac_ops_log_error "Cannot acquire the run lock. Exiting."
+    mac_ops_run_finish 1
+    return 1
+  fi
+  _MAC_OPS_RUN_LOCKED=true
 
   # 6. Emergency purge on disk danger
   mac_ops_emergency_purge || true
@@ -162,94 +164,38 @@ _mac_ops_cmd_run() {
   MAC_OPS_CLEANED_COUNT=0
   MAC_OPS_CLEANED_BYTES=0
   MAC_OPS_KILLED_COUNT=0
+  MAC_OPS_DATA_MOVED_COUNT=0
 
-  # Temporary directory for statistics collection
-  local stats_dir="${MAC_OPS_HOME}/.tmp/stats_$$"
-  local mod_count=0 mod_bytes=0
-  mkdir -p "${stats_dir}" 2>/dev/null
+  # Temporary directory for statistics collection (removed by mac_ops_run_finish)
+  MAC_OPS_RUN_STATS_DIR="${MAC_OPS_HOME}/.tmp/stats_$$"
+  mkdir -p "${MAC_OPS_RUN_STATS_DIR}" 2>/dev/null
 
   # 9. Load user ignore rules (before any module runs)
   mac_ops_ignore_load
 
-  # 10. Module execution
-  if [[ -n "${target_module}" ]]; then
-    # Run only specified module when --module is given
-    if [[ -z "${MAC_OPS_MODULE_MAP[${target_module}]+_}" ]]; then
-      mac_ops_log_error "Unknown module: ${target_module}"
-      mac_ops_release_lock
-      return 1
-    fi
-
-    local func="${MAC_OPS_MODULE_MAP[${target_module}]}"
-    mac_ops_log_info "Running module: ${target_module} (${func})"
-    ${func} || true
-  else
-    # File cleanup modules: wrap each module to record statistics to file
-    local file_modules=(
-      mac_ops_cache_cleanup
-      mac_ops_tmp_cleanup
-      mac_ops_log_cleanup
-      mac_ops_orphan_app_cleanup
-      mac_ops_brew_cleanup
-      mac_ops_dev_cleanup
-      mac_ops_docker_cleanup
-      mac_ops_browser_cleanup
-    )
-
-    mac_ops_log_info "Starting parallel execution of file cleanup modules (timeout: ${MAC_OPS_PARALLEL_TIMEOUT_SECONDS:-300}s per module)"
-    local -a pids=()
-    for mod_func in "${file_modules[@]}"; do
-      (
-        MAC_OPS_CLEANED_COUNT=0
-        MAC_OPS_CLEANED_BYTES=0
-        ${mod_func} || true
-        # Record statistics to file
-        print "${MAC_OPS_CLEANED_COUNT} ${MAC_OPS_CLEANED_BYTES}" > "${stats_dir}/${mod_func}.stats"
-      ) &
-      pids+=($!)
-    done
-
-    # Wait for all parallel modules to complete with timeout monitoring
-    mac_ops_parallel_wait_with_timeout "${MAC_OPS_PARALLEL_TIMEOUT_SECONDS:-300}" "${pids[@]}" || \
-      mac_ops_log_warn "Some modules timed out or failed during parallel execution"
-
-    # Sum up from statistics files
-    # shellcheck disable=SC1073,SC1036,SC1058,SC1072
-    for stats_file in "${stats_dir}"/*.stats(N); do
-      [[ ! -f "${stats_file}" ]] && continue
-      mod_count=0; mod_bytes=0
-      read -r mod_count mod_bytes < "${stats_file}" 2>/dev/null || continue
-      MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + ${mod_count:-0}))
-      MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + ${mod_bytes:-0}))
-    done
-
-    # Process modules sequential execution
-    mac_ops_log_info "Starting sequential execution of process modules"
-    mac_ops_zombie_killer || true
-    mac_ops_orphan_killer || true
+  # 10. Module execution (enabled modules only; --module runs one explicitly)
+  if ! mac_ops_run_modules "${target_module}" "${MAC_OPS_RUN_STATS_DIR}"; then
+    mac_ops_run_finish 1
+    return 1
   fi
 
-  # Cleanup statistics temporary directory (guard: must match expected path pattern)
-  [[ -n "${stats_dir}" && "${stats_dir}" == *"/stats_"* ]] && rm -rf "${stats_dir}" 2>/dev/null
-
-  # 9. Delete expired files (72 hour threshold)
+  # 11. Delete expired files (72 hour threshold)
   mac_ops_trash_expire || true
 
-  # 10. Release lock
-  mac_ops_release_lock
-
-  # 11. Take after snapshot
+  # 12. Take after snapshot
   local snapshot_after
   snapshot_after=$(mac_ops_take_snapshot)
 
-  # 12. System report (before/after comparison + cleanup summary)
-  mac_ops_print_report "${snapshot_before}" "${snapshot_after}" "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}"
+  # 13. System report (before/after comparison + cleanup summary)
+  mac_ops_print_report "${snapshot_before}" "${snapshot_after}" "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}" "${MAC_OPS_DATA_MOVED_COUNT}"
 
-  # 13. macOS notification (scheduled mode)
-  local before_disk_pct after_disk_pct
-  before_disk_pct="${snapshot_before%% *}"
-  after_disk_pct="${snapshot_after%% *}"
-  mac_ops_notify_completion "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}" "${before_disk_pct}" "${after_disk_pct}"
+  # 14. Release lock, macOS notification (a successful run only in scheduled
+  #     mode; a failed run - ERRORs logged or non-zero exit - also when run
+  #     by hand). Free bytes (df -k) are the second snapshot field
+  local before_free after_free _pct _rest
+  read -r _pct before_free _rest <<< "${snapshot_before}"
+  read -r _pct after_free _rest <<< "${snapshot_after}"
+  mac_ops_run_finish 0 "${before_free}" "${after_free}"
 }
 
 # =============================================================================
@@ -257,7 +203,12 @@ _mac_ops_cmd_run() {
 # =============================================================================
 _mac_ops_cmd_status() {
   # Read-only: no directory creation, no index write, no migration
-  mac_ops_load_config
+  mac_ops_load_config || return 1
+
+  # Health first: a failed or overdue scheduled run is the first line
+  mac_ops_run_health
+
+  print ""
 
   # Trash status
   mac_ops_trash_status
@@ -278,13 +229,8 @@ _mac_ops_cmd_status() {
 
   print ""
 
-  # launchd agent status
+  # launchd agent plists (loaded state is in the health section)
   print "=== launchd Agent ==="
-  if launchctl list 2>/dev/null | grep -q "com.mac-ops" 2>/dev/null; then
-    print "Status: Installed (Active)"
-  else
-    print "Status: Not installed"
-  fi
   _mac_ops_report_agents
 }
 
@@ -293,17 +239,31 @@ _mac_ops_cmd_status() {
 # =============================================================================
 _mac_ops_cmd_restore() {
   local restore_path="${1:-}"
+  local run_id="${2:-}"
 
-  if [[ -z "${restore_path}" ]]; then
-    mac_ops_log_error "Usage: mac-ops restore <path>"
+  if [[ -z "${restore_path}" && -z "${run_id}" ]]; then
+    mac_ops_log_error "Usage: mac-ops restore <path> | mac-ops restore --run <run-id>"
     return 1
   fi
 
-  mac_ops_load_config
+  mac_ops_load_config || return 1
   if [[ "${MAC_OPS_DRY_RUN}" != "true" ]]; then
     mac_ops_init_dirs
   fi
-  mac_ops_trash_restore "${restore_path}"
+  if [[ -n "${run_id}" ]]; then
+    mac_ops_trash_restore_run "${run_id}"
+  else
+    mac_ops_trash_restore "${restore_path}"
+  fi
+}
+
+# =============================================================================
+# runs command
+# =============================================================================
+_mac_ops_cmd_runs() {
+  # Read-only: no directory creation
+  mac_ops_load_config || return 1
+  mac_ops_runs_list "${1:-20}"
 }
 
 # =============================================================================
@@ -311,7 +271,7 @@ _mac_ops_cmd_restore() {
 # =============================================================================
 _mac_ops_cmd_list_trash() {
   # Read-only: no directory creation, no index write, no migration
-  mac_ops_load_config
+  mac_ops_load_config || return 1
   mac_ops_trash_list
 }
 
@@ -319,7 +279,7 @@ _mac_ops_cmd_list_trash() {
 # purge command
 # =============================================================================
 _mac_ops_cmd_purge() {
-  mac_ops_load_config
+  mac_ops_load_config || return 1
   if [[ "${MAC_OPS_DRY_RUN}" != "true" ]]; then
     mac_ops_init_dirs
   fi
@@ -513,7 +473,7 @@ _mac_ops_cmd_uninstall() {
 # =============================================================================
 _mac_ops_cmd_analyze() {
   mac_ops_init_dirs
-  mac_ops_load_config
+  mac_ops_load_config || return 1
   mac_ops_analyze
 }
 
@@ -522,7 +482,7 @@ _mac_ops_cmd_analyze() {
 # =============================================================================
 _mac_ops_cmd_monitor() {
   mac_ops_init_dirs
-  mac_ops_load_config
+  mac_ops_load_config || return 1
 
   local subcmd="${1:-show}"
   shift 2>/dev/null || true
@@ -574,7 +534,7 @@ _mac_ops_cmd_monitor() {
 # =============================================================================
 _mac_ops_cmd_config() {
   mac_ops_init_dirs
-  mac_ops_load_config
+  mac_ops_load_config || return 1
 
   print "=== mac-ops Current Configuration ==="
   print "MAC_OPS_HOME                     = ${MAC_OPS_HOME}"
@@ -582,19 +542,10 @@ _mac_ops_cmd_config() {
   print "MAC_OPS_META_DIR                 = ${MAC_OPS_META_DIR}"
   print "MAC_OPS_LOG_DIR                  = ${MAC_OPS_LOG_DIR}"
   print "MAC_OPS_CONFIG_FILE              = ${MAC_OPS_CONFIG_FILE}"
-  print "MAC_OPS_DRY_RUN                  = ${MAC_OPS_DRY_RUN}"
-  print "MAC_OPS_VERBOSE                  = ${MAC_OPS_VERBOSE}"
-  print "MAC_OPS_FORCE                    = ${MAC_OPS_FORCE}"
   print "MAC_OPS_SCHEDULED                = ${MAC_OPS_SCHEDULED}"
-  print "MAC_OPS_TRASH_RETENTION_HOURS    = ${MAC_OPS_TRASH_RETENTION_HOURS}"
-  print "MAC_OPS_CACHE_MAX_AGE_DAYS       = ${MAC_OPS_CACHE_MAX_AGE_DAYS}"
-  print "MAC_OPS_TMP_MAX_AGE_DAYS         = ${MAC_OPS_TMP_MAX_AGE_DAYS}"
-  print "MAC_OPS_VAR_FOLDERS_MAX_AGE_DAYS = ${MAC_OPS_VAR_FOLDERS_MAX_AGE_DAYS}"
-  print "MAC_OPS_CRASH_MAX_AGE_DAYS       = ${MAC_OPS_CRASH_MAX_AGE_DAYS}"
-  print "MAC_OPS_LOG_CLEANUP_MAX_AGE_DAYS = ${MAC_OPS_LOG_CLEANUP_MAX_AGE_DAYS}"
-  print "MAC_OPS_DIAG_REPORT_MAX_AGE_DAYS = ${MAC_OPS_DIAG_REPORT_MAX_AGE_DAYS}"
-  print "MAC_OPS_ORPHAN_MIN_RUNNING_HOURS = ${MAC_OPS_ORPHAN_MIN_RUNNING_HOURS}"
-  print "MAC_OPS_ORPHAN_APP_GRACE_DAYS    = ${MAC_OPS_ORPHAN_APP_GRACE_DAYS}"
+  print ""
+  print "=== Settings (source: env > file > default; cli = command-line flag) ==="
+  mac_ops_print_settings
 }
 
 # =============================================================================
@@ -604,6 +555,8 @@ _mac_ops_main() {
   local command="run"
   local module_name=""
   local restore_path=""
+  local restore_run=""
+  local runs_count=""
   local -a monitor_subcmd=()
 
   # Parse arguments
@@ -624,7 +577,7 @@ _mac_ops_main() {
         for monitor_arg in "$@"; do
           if [[ "${monitor_arg}" == "--dry-run" ]]; then
             MAC_OPS_DRY_RUN=true
-            _MAC_OPS_CLI_DRY_RUN=true
+            MAC_OPS_CLI_OVERRIDES[MAC_OPS_DRY_RUN]=true
           else
             monitor_subcmd+=("${monitor_arg}")
           fi
@@ -641,15 +594,36 @@ _mac_ops_main() {
       restore)
         command="restore"
         shift
-        # Capture path argument after restore
+        # Capture path argument after restore (or --run <run-id>, below)
         if [[ $# -gt 0 && "${1}" != --* ]]; then
           restore_path="${1}"
           shift
         fi
         ;;
+      --run)
+        # restore --run <run-id> (any position after restore)
+        if [[ $# -lt 2 || "${2}" == --* ]]; then
+          print -- "[ERROR] --run needs a run ID (see: mac-ops runs)" >&2
+          return 1
+        fi
+        restore_run="${2}"
+        shift 2
+        ;;
+      --run=*)
+        restore_run="${1#--run=}"
+        shift
+        ;;
+      runs)
+        command="runs"
+        shift
+        if [[ $# -gt 0 && "${1}" =~ ^[0-9]+$ ]]; then
+          runs_count="${1}"
+          shift
+        fi
+        ;;
       --dry-run)
         MAC_OPS_DRY_RUN=true
-        _MAC_OPS_CLI_DRY_RUN=true
+        MAC_OPS_CLI_OVERRIDES[MAC_OPS_DRY_RUN]=true
         shift
         ;;
       --module=*)
@@ -658,10 +632,12 @@ _mac_ops_main() {
         ;;
       --verbose)
         MAC_OPS_VERBOSE=true
+        MAC_OPS_CLI_OVERRIDES[MAC_OPS_VERBOSE]=true
         shift
         ;;
       --force)
         MAC_OPS_FORCE=true
+        MAC_OPS_CLI_OVERRIDES[MAC_OPS_FORCE]=true
         shift
         ;;
       --scheduled)
@@ -684,6 +660,11 @@ _mac_ops_main() {
     esac
   done
 
+  if [[ -n "${restore_run}" && "${command}" != "restore" ]]; then
+    print -- "[ERROR] --run is only valid with restore: mac-ops restore --run <run-id>" >&2
+    return 1
+  fi
+
   # Execute command
   case "${command}" in
     run)
@@ -699,7 +680,10 @@ _mac_ops_main() {
       _mac_ops_cmd_status
       ;;
     restore)
-      _mac_ops_cmd_restore "${restore_path}"
+      _mac_ops_cmd_restore "${restore_path}" "${restore_run}"
+      ;;
+    runs)
+      _mac_ops_cmd_runs "${runs_count}"
       ;;
     list-trash)
       _mac_ops_cmd_list_trash

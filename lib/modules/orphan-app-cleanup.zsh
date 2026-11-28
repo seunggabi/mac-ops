@@ -124,48 +124,11 @@ _mac_ops_is_safelisted() {
   return 1
 }
 
-# -----------------------------------------------------------------------------
-# Security software safelist: keywords matched case-insensitively anywhere in
-# the entry name. Endpoint security, VPN and Korean banking security products
-# use many bundle ID prefixes, and removing their data can break logins or
-# trigger a reinstall, so they are never touched.
-# -----------------------------------------------------------------------------
-_MAC_OPS_SECURITY_KEYWORD_SAFELIST=(
-  "ahnlab"
-  "astx"
-  "crossex"
-  "delfino"
-  "forticlient"
-  "fortinet"
-  "iniline"
-  "inisafe"
-  "initech"
-  "jiran"
-  "jkok"
-  "nprotect"
-  "pcassist"
-  "pnpsecure"
-  "raon"
-  "touchen"
-  "veraport"
-  "wizvera"
-)
-
-# -----------------------------------------------------------------------------
-# Internal: Check if a name contains a security software keyword
-# Returns 0 (true) if protected, 1 (false) if not
-# Usage: _mac_ops_is_security_keyword_name <name>
-# -----------------------------------------------------------------------------
-_mac_ops_is_security_keyword_name() {
-  local lower_name="${(L)1}"
-  local keyword
-  for keyword in "${_MAC_OPS_SECURITY_KEYWORD_SAFELIST[@]}"; do
-    if [[ "${lower_name}" == *"${keyword}"* ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
+# Security software (MAC_OPS_SECURITY_KEYWORDS, lib/utils/security-keywords.zsh)
+# is never touched: endpoint security, VPN and Korean banking security
+# products use many bundle ID prefixes, and removing their data can break
+# logins or trigger a reinstall. Matched case-insensitively anywhere in the
+# entry name.
 
 # -----------------------------------------------------------------------------
 # Internal: Check if a scan location is cache-like (see the list at the top)
@@ -297,11 +260,11 @@ mac_ops_orphan_app_cleanup() {
   # as belonging to a running app and skipped.
   typeset -g _MAC_OPS_ORPHAN_APP_RUNNING_UNKNOWN=false
   local _running_id _lsapp_out="" _lsapp_rc=0
-  _lsapp_out=$(lsappinfo list 2>/dev/null)
+  _lsapp_out=$(_mac_ops_running_bundle_ids)
   _lsapp_rc=$?
   while IFS= read -r _running_id; do
     [[ -n "${_running_id}" ]] && _MAC_OPS_RUNNING_BUNDLES[${_running_id}]=1
-  done < <(print -r -- "${_lsapp_out}" | grep 'bundleID=' | sed 's/.*bundleID="\([^"]*\)".*/\1/' | grep -v '^\[' | sort -u)
+  done < <(print -r -- "${_lsapp_out}" | sort -u)
   if [[ ${_lsapp_rc} -ne 0 || ${#_MAC_OPS_RUNNING_BUNDLES[@]} -eq 0 ]]; then
     _MAC_OPS_ORPHAN_APP_RUNNING_UNKNOWN=true
     mac_ops_log_warn "Orphan app cleanup: running-app list unavailable (lsappinfo failed or listed no app), every entry is treated as in use and skipped"
@@ -633,8 +596,14 @@ _mac_ops_orphan_app_process_entry() {
     return 0
   fi
 
-  # Security software is never touched, whatever its bundle ID prefix is
-  if _mac_ops_is_security_keyword_name "${item_name}"; then
+  # Security software is never touched, whatever its bundle ID prefix is.
+  # Fail closed: without the check (security-keywords.zsh not loaded) the
+  # entry is left alone
+  if ! (( ${+functions[_mac_ops_fc_is_security_path]} )); then
+    mac_ops_log_warn "Security software check unavailable (security-keywords.zsh not loaded), skipped: ${item}"
+    return 0
+  fi
+  if _mac_ops_fc_is_security_path "${item_name}"; then
     mac_ops_log_debug "Security software keyword protected: ${item_name}"
     return 0
   fi

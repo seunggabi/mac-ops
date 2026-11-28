@@ -26,6 +26,35 @@ mac_ops_format_bytes() {
   fi
 }
 
+# Honest wording for items parked in the mac-ops trash (nothing is freed
+# until the trash is purged after the retention period)
+# Args: cleaned_count, cleaned_bytes
+mac_ops_trash_summary_text() {
+  local size
+  size=$(mac_ops_format_bytes "$2")
+  if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
+    print -r -- "${1} items (${size}) would be moved to trash (dry run)"
+  else
+    print -r -- "${1} items (${size}) moved to trash (purged after ${MAC_OPS_TRASH_RETENTION_HOURS:-72} hours)"
+  fi
+}
+
+# Real change in free disk space between two df -k readings (bytes)
+# Args: free_before_bytes, free_after_bytes
+mac_ops_free_change_text() {
+  local before="$1" after="$2"
+  if [[ ! "$before" =~ ^[0-9]+$ || ! "$after" =~ ^[0-9]+$ || "$before" == "0" || "$after" == "0" ]]; then
+    print -r -- "free space change unknown"
+    return 0
+  fi
+  local delta=$(( after - before ))
+  if (( delta > 0 )); then
+    print -r -- "free space +$(mac_ops_format_bytes "$delta")"
+  else
+    print -r -- "free space not increased yet (space is reclaimed when the trash is purged)"
+  fi
+}
+
 # Convert seconds to human-readable format
 # Args: seconds
 # Returns: Outputs formatted string to stdout
@@ -94,14 +123,11 @@ mac_ops_print_summary() {
   local cleaned_bytes="$2"
   local killed_procs="$3"
 
-  local formatted_size
-  formatted_size=$(mac_ops_format_bytes "$cleaned_bytes")
-
   echo ""
   echo "$(mac_ops_color_bold "=== Execution Summary ===")"
 
   if [[ -n "$cleaned_count" && "$cleaned_count" != "0" ]]; then
-    echo "$(mac_ops_color_green "✓") Files cleaned: ${cleaned_count} items (${formatted_size})"
+    echo "$(mac_ops_color_green "✓") $(mac_ops_trash_summary_text "$cleaned_count" "$cleaned_bytes")"
   fi
 
   if [[ -n "$killed_procs" && "$killed_procs" != "0" ]]; then
@@ -116,7 +142,8 @@ mac_ops_print_summary() {
 }
 
 # Print system report with before/after snapshots and cleanup summary
-# Args: before_snapshot, after_snapshot, cleaned_count, cleaned_bytes, killed_procs
+# Args: before_snapshot, after_snapshot, cleaned_count, cleaned_bytes, killed_procs,
+#       data_moved (optional: items moved out of settings/app-data areas)
 # Snapshot format: "disk_usage_pct disk_available_bytes mem_used_bytes mem_total_bytes"
 mac_ops_print_report() {
   local before_snapshot="$1"
@@ -124,6 +151,7 @@ mac_ops_print_report() {
   local cleaned_count="$3"
   local cleaned_bytes="$4"
   local killed_procs="$5"
+  local data_moved="${6:-0}"
 
   # Parse before snapshot
   local before_disk_usage before_disk_free before_mem_used before_mem_total
@@ -218,11 +246,14 @@ mac_ops_print_report() {
   echo ""
   echo "$(mac_ops_color_bold "=== Cleanup Summary ===")"
 
-  local formatted_size
-  formatted_size=$(mac_ops_format_bytes "$cleaned_bytes")
+  echo "$(mac_ops_color_blue "ℹ") Disk: $(mac_ops_free_change_text "$before_disk_free" "$after_disk_free") (df, before/after this run)"
 
   if [[ -n "$cleaned_count" && "$cleaned_count" != "0" ]]; then
-    echo "$(mac_ops_color_green "✓") Files cleaned: ${cleaned_count} items (${formatted_size})"
+    echo "$(mac_ops_color_green "✓") $(mac_ops_trash_summary_text "$cleaned_count" "$cleaned_bytes")"
+  fi
+
+  if [[ -n "$data_moved" && "$data_moved" != "0" ]]; then
+    echo "$(mac_ops_color_yellow "⚠") ${data_moved} data items moved (settings/app data; see WARN lines in the log)"
   fi
 
   if [[ -n "$killed_procs" && "$killed_procs" != "0" ]]; then

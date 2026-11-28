@@ -2,6 +2,28 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>DryRun</key>
+	<false/>
+	<key>Verbose</key>
+	<false/>
+	<key>Force</key>
+	<false/>
+	<key>TrashRetentionHours</key>
+	<integer>72</integer>
+	<key>MaxSingleFileBytes</key>
+	<integer>2147483648</integer>
+	<key>ParallelTimeoutSeconds</key>
+	<integer>300</integer>
+	<key>IndexLockTimeoutSeconds</key>
+	<integer>120</integer>
+	<key>OpenFilesTTLSeconds</key>
+	<integer>60</integer>
+	<key>TrashSkipOpenDirs</key>
+	<true/>
+	<key>TrashReconcileMaxDepth</key>
+	<integer>6</integer>
+	<key>TrashRecoveryMinLeftHours</key>
+	<integer>24</integer>
 	<key>Modules</key>
 	<dict>
 		<key>cache-cleanup</key>
@@ -9,6 +31,8 @@
 			<key>Enabled</key>
 			<true/>
 			<key>MaxAgeDays</key>
+			<integer>30</integer>
+			<key>RecentDays</key>
 			<integer>7</integer>
 		</dict>
 		<key>tmp-cleanup</key>
@@ -17,6 +41,10 @@
 			<true/>
 			<key>MaxAgeDays</key>
 			<integer>3</integer>
+			<key>VarFoldersMaxAgeDays</key>
+			<integer>7</integer>
+			<key>CrashMaxAgeDays</key>
+			<integer>14</integer>
 		</dict>
 		<key>log-cleanup</key>
 		<dict>
@@ -24,33 +52,29 @@
 			<true/>
 			<key>MaxAgeDays</key>
 			<integer>7</integer>
-		</dict>
-		<key>zombie-killer</key>
-		<dict>
-			<key>Enabled</key>
-			<true/>
-		</dict>
-		<key>orphan-killer</key>
-		<dict>
-			<key>Enabled</key>
-			<true/>
-			<key>MinRunningHours</key>
-			<integer>24</integer>
+			<key>DiagReportMaxAgeDays</key>
+			<integer>30</integer>
 		</dict>
 		<key>orphan-app-cleanup</key>
 		<dict>
 			<key>Enabled</key>
 			<true/>
+			<key>GraceDays</key>
+			<integer>7</integer>
+			<key>DataAction</key>
+			<string>report</string>
 		</dict>
 		<key>brew-cleanup</key>
 		<dict>
 			<key>Enabled</key>
-			<true/>
+			<false/>
 		</dict>
 		<key>dev-cleanup</key>
 		<dict>
 			<key>Enabled</key>
 			<false/>
+			<key>MaxAgeDays</key>
+			<integer>30</integer>
 		</dict>
 		<key>browser-cleanup</key>
 		<dict>
@@ -61,19 +85,36 @@
 		<dict>
 			<key>Enabled</key>
 			<false/>
+			<key>Action</key>
+			<string>report</string>
+			<key>PruneUntilHours</key>
+			<integer>720</integer>
+			<key>ProbeTimeoutSeconds</key>
+			<integer>10</integer>
+		</dict>
+		<key>zombie-killer</key>
+		<dict>
+			<key>Enabled</key>
+			<false/>
+			<key>Action</key>
+			<string>report</string>
+		</dict>
+		<key>orphan-killer</key>
+		<dict>
+			<key>Enabled</key>
+			<false/>
+			<key>MinRunningHours</key>
+			<integer>24</integer>
+			<key>Action</key>
+			<string>report</string>
 		</dict>
 	</dict>
-	<key>TrashRetentionHours</key>
-	<integer>72</integer>
-	<key>MaxSingleFileBytes</key>
-	<integer>2147483648</integer>
-	<key>MaxBatchBytes</key>
-	<integer>10737418240</integer>
-	<key>DryRun</key>
-	<false/>
-	<key>LogLevel</key>
-	<string>INFO</string>
-	<key>DiskSpaceCriticalPercent</key>
-	<integer>95</integer>
+	<key>Monitor</key>
+	<dict>
+		<key>RetentionDays</key>
+		<integer>7</integer>
+		<key>KillThresholdMB</key>
+		<integer>500</integer>
+	</dict>
 </dict>
 </plist>

@@ -183,7 +183,8 @@ mac_ops_analyze() {
 
   # 10. /tmp (current user files only)
   category_name="Temporary Files (/tmp)"
-  target_path="/tmp"
+  # Same scan roots as tmp-cleanup (tests point them at fixtures)
+  target_path="${MAC_OPS_TMP_DIR:-/tmp}"
   if [[ -d "${target_path}" ]]; then
     # Calculate only current user's files
     user_tmp_size=0
@@ -201,7 +202,7 @@ mac_ops_analyze() {
 
   # 11. /private/var/folders (current user files only)
   category_name="System Temp Folders"
-  target_path="/private/var/folders"
+  target_path="${MAC_OPS_VAR_FOLDERS_DIR:-/private/var/folders}"
   if [[ -d "${target_path}" ]]; then
     user_var_size=0
     while IFS= read -r item; do
@@ -273,7 +274,7 @@ mac_ops_analyze() {
 
   # 14. mac-ops trash
   category_name="mac-ops Trash"
-  target_path="${HOME}/.mac-ops/.trash"
+  target_path="${MAC_OPS_TRASH_DIR:-${HOME}/.mac-ops/.trash}"
   if [[ -d "${target_path}" ]]; then
     size_bytes=$(mac_ops_get_dir_size "${target_path}")
     formatted_size=$(mac_ops_format_bytes "${size_bytes}")

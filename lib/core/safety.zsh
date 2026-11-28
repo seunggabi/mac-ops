@@ -56,6 +56,30 @@ MAC_OPS_WHITELIST=(
   "/Library/LaunchAgents"
 )
 
+# --- Self-protection: the tool's own state and companion tools' data ---
+# Resolved at check time (HOME / MAC_OPS_HOME may change after sourcing);
+# a leading "~/" means ${HOME}. ${MAC_OPS_HOME} is always protected too.
+# Entries protect the directory itself and everything below it.
+# Companion/cleaner trash dirs: add entries here only with a reason.
+#   ~/.mac-optimize   record directory of the companion mac-optimize tool
+#   /tmp/<root dirs>  mac-optimize parks recoverable items at /tmp/Users etc.
+# shellcheck disable=SC2088  # literal "~/" is expanded to ${HOME} at check time
+MAC_OPS_SELF_PROTECTED_EXTRA=(
+  "~/.mac-optimize"
+  "/tmp/Users"
+  "/tmp/Library"
+  "/tmp/Applications"
+  "/tmp/usr"
+  "/tmp/opt"
+  "/tmp/private"
+  "/private/tmp/Users"
+  "/private/tmp/Library"
+  "/private/tmp/Applications"
+  "/private/tmp/usr"
+  "/private/tmp/opt"
+  "/private/tmp/private"
+)
+
 # --- Processes that must never be terminated ---
 MAC_OPS_PROTECTED_PROCESSES=(
   "kernel_task"
@@ -73,8 +97,38 @@ MAC_OPS_PROTECTED_PROCESSES=(
 )
 
 # --- Size limits ---
-MAC_OPS_MAX_SINGLE_FILE_BYTES=2147483648   # 2GB
+MAC_OPS_MAX_SINGLE_FILE_BYTES=${MAC_OPS_MAX_SINGLE_FILE_BYTES:-2147483648}   # 2GB (setting MaxSingleFileBytes)
 MAC_OPS_MAX_BATCH_BYTES=10737418240        # 10GB
+
+# -----------------------------------------------------------------------------
+# Self-protection match: 0 if path is (under) the tool's own home or a
+# companion tool's directory. Compares the lexically normalized path and the
+# symlink-resolved path (:A also collapses ".." and trailing slashes, even for
+# non-existent paths) against each protected entry in both forms.
+# Usage: _mac_ops_is_self_protected <path>   (sets REPLY to the matching rule)
+# -----------------------------------------------------------------------------
+_mac_ops_is_self_protected() {
+  local raw="${1}" cand rule resolved_rule entry
+  local -a cands rules
+  cands=("${raw:A}" "${raw}")
+  rules=("${MAC_OPS_SELF_PROTECTED_EXTRA[@]}")
+  [[ -n "${MAC_OPS_HOME}" ]] && rules+=("${MAC_OPS_HOME}")
+  for entry in "${rules[@]}"; do
+    rule="${entry/#\~\//${HOME}/}"
+    rule="${rule%/}"
+    resolved_rule="${rule:A}"
+    for cand in "${cands[@]}"; do
+      cand="${cand//\/\///}"
+      [[ "${cand}" == "/" ]] || cand="${cand%/}"
+      if [[ "${cand}" == "${rule}" || "${cand}" == "${rule}/"* \
+        || "${cand}" == "${resolved_rule}" || "${cand}" == "${resolved_rule}/"* ]]; then
+        REPLY="${rule}"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
 
 # -----------------------------------------------------------------------------
 # Check path safety
@@ -129,6 +183,13 @@ mac_ops_is_path_safe() {
       return 1
     fi
   done
+
+  # Self-protection (tool home, companion tool dirs): the raw input is also
+  # checked so ".." components and symlinks cannot slip past
+  if _mac_ops_is_self_protected "${target_path}"; then
+    mac_ops_log_warn "Protected path: ${target_path} (self-protection rule: ${REPLY})"
+    return 1
+  fi
 
   # Protect root directory itself
   if [[ "${resolved_path}" == "/" ]]; then

@@ -84,6 +84,36 @@ mac_ops_log_debug() {
 }
 
 # -----------------------------------------------------------------------------
+# Number of lines in the log file (0 when absent). Result in REPLY.
+# -----------------------------------------------------------------------------
+mac_ops_log_line_count() {
+  REPLY=0
+  if [[ -f "${MAC_OPS_LOG_FILE}" ]]; then
+    REPLY=$(wc -l < "${MAC_OPS_LOG_FILE}" 2>/dev/null | tr -d ' ') || REPLY=0
+  fi
+  [[ "${REPLY}" =~ ^[0-9]+$ ]] || REPLY=0
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Count log lines of one level written after line <start>. Counted from the
+# file so lines from parallel module subshells are included. If the file
+# shrank (rotated) since <start>, the whole file is counted. Result in REPLY.
+# Usage: mac_ops_log_count_since <start_line> <LEVEL>
+# -----------------------------------------------------------------------------
+mac_ops_log_count_since() {
+  local start="${1:-0}" level="${2}"
+  [[ "${start}" =~ ^[0-9]+$ ]] || start=0
+  mac_ops_log_line_count
+  (( REPLY < start )) && start=0
+  REPLY=0
+  [[ -f "${MAC_OPS_LOG_FILE}" ]] || return 0
+  REPLY=$(tail -n +$((start + 1)) "${MAC_OPS_LOG_FILE}" 2>/dev/null | grep -c "^\[[^]]*\] \[${level}\] " || true)
+  [[ "${REPLY}" =~ ^[0-9]+$ ]] || REPLY=0
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # Log file rotation
 # Execute when exceeds 5MB, keep maximum 7 files
 # mac-ops.log -> mac-ops.log.1 -> ... -> mac-ops.log.7 (deleted)

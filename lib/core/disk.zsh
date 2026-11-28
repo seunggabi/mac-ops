@@ -22,19 +22,18 @@ mac_ops_get_disk_usage() {
 
 # -----------------------------------------------------------------------------
 # Return remaining disk space in bytes
-# Based on root volume (/), convert 512-byte blocks -> bytes
+# Based on root volume (/), df -k (1024-byte blocks, independent of BLOCKSIZE)
 # -----------------------------------------------------------------------------
 mac_ops_get_disk_available() {
   local available_blocks
-  available_blocks=$(df / | tail -1 | awk '{print $4}')
+  available_blocks=$(df -k / | tail -1 | awk '{print $4}')
 
   if [[ -z "${available_blocks}" || ! "${available_blocks}" =~ ^[0-9]+$ ]]; then
     mac_ops_log_error "Failed to query available disk space"
     return 1
   fi
 
-  # df uses 512-byte blocks by default
-  local available_bytes=$((available_blocks * 512))
+  local available_bytes=$((available_blocks * 1024))
   print -- "${available_bytes}"
   return 0
 }
