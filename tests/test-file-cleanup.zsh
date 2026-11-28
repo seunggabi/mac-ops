@@ -200,7 +200,8 @@ exec {held_fd}<&-
 print ""
 
 # =============================================================================
-# User temp directory (T, C, X under /private/var/folders/*/*)
+# User temp directory (/private/var/folders/*/*): the candidates are main's
+# (old regular files up to depth 6); protections only remove candidates
 # =============================================================================
 print "[TEST] var_folders_protection"
 
@@ -222,19 +223,22 @@ print "x" > "${VF_T}/TemporaryItems/inner/file"
 print "x" > "${VF_T}/com.apple.fixture/file"
 print "x" > "${VF_X}/abc123.code_sign_clone/App.app/binary"
 
-# Old top-level mtime, fresh file inside
+# Old file next to a fresh one in the same top-level directory
 mkdir -p "${VF_T}/old-top-fresh-inner/sub"
+print "x" > "${VF_T}/old-top-fresh-inner/old"
 print "x" > "${VF_T}/old-top-fresh-inner/sub/fresh"
-touch -t "${OLD_STAMP}" "${VF_T}/old-top-fresh-inner/sub" "${VF_T}/old-top-fresh-inner"
+touch -t "${OLD_STAMP}" "${VF_T}/old-top-fresh-inner/old" "${VF_T}/old-top-fresh-inner/sub" "${VF_T}/old-top-fresh-inner"
 
 # Old everywhere, but one file was read recently
 mkdir -p "${VF_T}/old-read-recently"
 print "x" > "${VF_T}/old-read-recently/file"
+print "x" > "${VF_T}/old-read-recently/other"
 make_old "${VF_T}/old-read-recently"
 touch -a "${VF_T}/old-read-recently/file"
 
 # A socket inside an old directory
 mkdir -p "${VF_T}/old-with-socket"
+print "x" > "${VF_T}/old-with-socket/old"
 zsocket -l "${VF_T}/old-with-socket/i.sock"
 inner_socket_fd=${REPLY}
 
@@ -245,23 +249,23 @@ print "x" > "${VF_T}/AhnLab-Update/file"
 # Open in a running process (seeded below)
 mkdir -p "${VF_T}/held-open"
 print "x" > "${VF_T}/held-open/file"
+print "x" > "${VF_T}/held-open/other"
 
 # Per-app directory of a running app (bundle ID seeded above)
 mkdir -p "${VF_USER}/C/com.example.running.helper"
 print "x" > "${VF_USER}/C/com.example.running.helper/shader"
 make_old "${VF_USER}/C/com.example.running.helper"
 
-# Old directory tree without any file (a daemon's temp root)
-mkdir -p "${VF_T}/somedaemond/sub"
-
-# Positive controls: old directory and old file with nothing fresh
-mkdir -p "${VF_T}/old-dir/sub"
+# Positive controls: old file in an old directory, old top-level file,
+# old file in C (main scanned C as well)
+mkdir -p "${VF_T}/old-dir/sub" "${VF_USER}/C/org.sample.gone"
 print "x" > "${VF_T}/old-dir/sub/file"
 print "x" > "${VF_T}/old-file.txt"
+print "x" > "${VF_USER}/C/org.sample.gone/blob"
 
 for fixture in "${VF_T}/s.sock" "${VF_T}/TemporaryItems" "${VF_T}/com.apple.fixture" \
     "${VF_X}/abc123.code_sign_clone" "${VF_T}/old-with-socket" "${VF_T}/AhnLab-Update" \
-    "${VF_T}/held-open" "${VF_T}/somedaemond" "${VF_T}/old-dir" "${VF_T}/old-file.txt"; do
+    "${VF_T}/held-open" "${VF_T}/old-dir" "${VF_T}/old-file.txt" "${VF_USER}/C/org.sample.gone"; do
     make_old "${fixture}"
 done
 
@@ -271,25 +275,126 @@ n${VF_T}/held-open/file"
 
 vf_output=$(_mac_ops_tmp_clean_var_folders 7 2>&1)
 
-assert_survives "${vf_output}" "${VF_T}/s.sock" "socket" "socket" "tmp-cleanup"
-assert_survives "${vf_output}" "${VF_T}/TemporaryItems" "TemporaryItems" "TemporaryItems" "tmp-cleanup"
-assert_survives "${vf_output}" "${VF_T}/com.apple.fixture" "com.apple" "com.apple.* item" "tmp-cleanup"
-assert_survives "${vf_output}" "${VF_X}/abc123.code_sign_clone" "code-sign clone" "code-sign clone" "tmp-cleanup"
-assert_survives "${vf_output}" "${VF_T}/old-top-fresh-inner" "used after" "old directory with a fresh inner file" "tmp-cleanup"
-assert_survives "${vf_output}" "${VF_T}/old-read-recently" "used after" "old directory with a recently read file" "tmp-cleanup"
-assert_survives "${vf_output}" "${VF_T}/old-with-socket" "socket inside" "old directory with a socket inside" "tmp-cleanup"
-assert_survives "${vf_output}" "${VF_T}/AhnLab-Update" "security software path" "security software directory" "tmp-cleanup"
-assert_survives "${vf_output}" "${VF_T}/held-open" "open by a running process" "directory open in a process" "tmp-cleanup"
-assert_survives "${vf_output}" "${VF_USER}/C/com.example.running.helper" "owning app is running" "per-app directory of a running app" "tmp-cleanup"
-assert_survives "${vf_output}" "${VF_T}/somedaemond" "no files inside" "old directory tree without files" "tmp-cleanup"
-assert_moved "${vf_output}" "${VF_T}/old-dir" "old directory with nothing fresh"
-assert_moved "${vf_output}" "${VF_T}/old-file.txt" "old file"
-assert_output_not_contains "${vf_output}" "Will move to trash: ${VF_T}/old-dir/sub" "an old directory is moved as a whole, not file by file"
+assert_output_not_contains "${vf_output}" "Will move to trash: ${VF_T}/s.sock " "socket is not a candidate"
+assert_survives "${vf_output}" "${VF_T}/TemporaryItems/inner/file" "TemporaryItems" "file in TemporaryItems" "tmp-cleanup"
+assert_survives "${vf_output}" "${VF_T}/com.apple.fixture/file" "com.apple" "file in a com.apple.* item" "tmp-cleanup"
+assert_survives "${vf_output}" "${VF_X}/abc123.code_sign_clone/App.app/binary" "code-sign clone" "file in a code-sign clone" "tmp-cleanup"
+assert_survives "${vf_output}" "${VF_T}/old-top-fresh-inner/old" "top-level item" "old file next to a fresh file" "tmp-cleanup"
+assert_output_contains "${vf_output}" "skipped (tmp-cleanup): ${VF_T}/old-top-fresh-inner (reason: used after" "the fresh file is the logged reason"
+assert_survives "${vf_output}" "${VF_T}/old-read-recently/other" "top-level item" "old file next to a recently read file" "tmp-cleanup"
+assert_survives "${vf_output}" "${VF_T}/old-with-socket/old" "top-level item" "old file next to a socket" "tmp-cleanup"
+assert_output_contains "${vf_output}" "skipped (tmp-cleanup): ${VF_T}/old-with-socket (reason: socket inside" "the inner socket is the logged reason"
+assert_survives "${vf_output}" "${VF_T}/AhnLab-Update/file" "top-level item" "security software file" "tmp-cleanup"
+assert_survives "${vf_output}" "${VF_T}/held-open/other" "top-level item" "file next to a file open in a process" "tmp-cleanup"
+assert_survives "${vf_output}" "${VF_USER}/C/com.example.running.helper/shader" "top-level item ${VF_USER}/C/com.example.running.helper: owning app is running" "file of a running app" "tmp-cleanup"
+assert_moved "${vf_output}" "${VF_T}/old-dir/sub/file" "old file in an old directory"
+assert_moved "${vf_output}" "${VF_T}/old-file.txt" "old top-level file"
+assert_moved "${vf_output}" "${VF_USER}/C/org.sample.gone/blob" "old file in C of an app that is not running"
+assert_output_not_contains "${vf_output}" "Will move to trash: ${VF_T}/old-dir " "a directory is never moved as a whole"
+assert_output_not_contains "${vf_output}" "Will move to trash: ${VF_USER}/C/org.sample.gone " "a C directory is never moved as a whole"
 
 print ""
 
 # =============================================================================
-# /tmp: parked items go, agent scratch directories and sockets stay
+# Main's candidate set: a deep old file under a top-level folder that also
+# holds a nested com.apple.* directory. Only what main's find selects may be
+# announced, the nested com.apple.* cache stays, the folder is never moved.
+# =============================================================================
+print "[TEST] var_folders_keeps_main_candidate_set"
+
+CAND_ROOT="${TEST_TMPDIR}/vf-cand"
+CAND_APP="${CAND_ROOT}/zz/yy/C/org.sample.editor"
+mkdir -p "${CAND_APP}/sub" "${CAND_APP}/com.apple.metal/16777235_402" "${CAND_APP}/a/b/c"
+print "x" > "${CAND_APP}/sub/old-deep"                          # depth 6: main selects it
+print "x" > "${CAND_APP}/com.apple.metal/libraries.data"        # depth 6: main selects it
+print "x" > "${CAND_APP}/com.apple.metal/16777235_402/shader"   # depth 7: beyond main's find
+print "x" > "${CAND_APP}/a/b/c/too-deep"                        # depth 8: beyond main's find
+make_old "${CAND_ROOT}"
+
+main_candidates=$(/usr/bin/find "${CAND_ROOT}" -maxdepth 6 -type f -mtime +7 -user "${USER}" 2>/dev/null | sort)
+cand_output=$(MAC_OPS_VAR_FOLDERS_DIR="${CAND_ROOT}"; _mac_ops_tmp_clean_var_folders 7 2>&1)
+announced=$(print -r -- "${cand_output}" | sed -n 's/.*Will move to trash: \(.*\) (reason: .*/\1/p' | sort)
+
+extra=$(comm -13 <(print -r -- "${main_candidates}") <(print -r -- "${announced}"))
+assert_eq "${extra}" "" "every announced move is one of main's find candidates"
+assert_eq "${announced}" "${CAND_APP}/sub/old-deep" "only the deep old file is moved"
+assert_survives "${cand_output}" "${CAND_APP}/com.apple.metal/libraries.data" "com.apple" "file in a nested com.apple.* directory" "tmp-cleanup"
+assert_output_not_contains "${cand_output}" "Will move to trash: ${CAND_APP} " "the top-level folder is never moved"
+assert_output_not_contains "${cand_output}" "Will move to trash: ${CAND_APP}/com.apple.metal " "the nested com.apple.* directory is never moved"
+assert_output_not_contains "${cand_output}" "too-deep" "a file beyond main's depth is not a candidate"
+
+print ""
+
+# =============================================================================
+# Running-app set: fails closed, matches bundle ID, vendor prefix and app name
+# =============================================================================
+print "[TEST] running_app_set"
+
+APP_ROOT="${TEST_TMPDIR}/vf-app"
+for app_dir in Telegram com.example.vendor.other com.unrelated.thing; do
+    mkdir -p "${APP_ROOT}/zz/yy/C/${app_dir}"
+    print "x" > "${APP_ROOT}/zz/yy/C/${app_dir}/blob"
+done
+make_old "${APP_ROOT}"
+
+# lsappinfo fails: the set cannot be built, so nothing may be moved
+app_output=$(
+    MAC_OPS_VAR_FOLDERS_DIR="${APP_ROOT}"
+    _MAC_OPS_FC_RUNNING_BUNDLES=""
+    _MAC_OPS_FC_RUNNING_APPS_STATE=""
+    lsappinfo() { return 1 }
+    _mac_ops_tmp_clean_var_folders 7 2>&1
+)
+assert_output_not_contains "${app_output}" "Will move to trash" "nothing is moved when the running-app list cannot be built"
+assert_output_contains "${app_output}" "com.unrelated.thing: running-app list unavailable" "the unavailable running-app list is logged"
+
+# The process list fails: same
+app_output=$(
+    MAC_OPS_VAR_FOLDERS_DIR="${APP_ROOT}"
+    _MAC_OPS_FC_RUNNING_EXECS=""
+    _MAC_OPS_FC_RUNNING_APPS_STATE=""
+    ps() { return 1 }
+    _mac_ops_tmp_clean_var_folders 7 2>&1
+)
+assert_output_not_contains "${app_output}" "Will move to trash" "nothing is moved when the process list cannot be built"
+
+# App name from the executable path, vendor prefix from a running bundle ID
+app_output=$(
+    MAC_OPS_VAR_FOLDERS_DIR="${APP_ROOT}"
+    _MAC_OPS_FC_RUNNING_BUNDLES="com.example.vendor-app.main"
+    _MAC_OPS_FC_RUNNING_APPS_STATE=""
+    seed_running "${IDLE_PROCESSES}
+/Applications/Telegram.app/Contents/MacOS/Telegram"
+    _mac_ops_tmp_clean_var_folders 7 2>&1
+)
+assert_survives "${app_output}" "${APP_ROOT}/zz/yy/C/Telegram/blob" "top-level item ${APP_ROOT}/zz/yy/C/Telegram: owning app is running" "folder named after a running app" "tmp-cleanup"
+assert_survives "${app_output}" "${APP_ROOT}/zz/yy/C/com.example.vendor.other/blob" "top-level item ${APP_ROOT}/zz/yy/C/com.example.vendor.other: owning app is running" "folder under a running app's vendor prefix" "tmp-cleanup"
+assert_moved "${app_output}" "${APP_ROOT}/zz/yy/C/com.unrelated.thing/blob" "file of an app that is not running"
+
+print ""
+
+# =============================================================================
+# Processes started by this run do not count as someone else running
+# =============================================================================
+print "[TEST] own_descendants_ignored"
+
+# ps shows argv[0] as the executable path, so this reads as a running brew
+(exec -a "${TEST_TMPDIR}/bin/brew" /bin/sleep 30) &
+own_brew_pid=$!
+sleep 0.3
+ps -eo comm= | grep -q "^${TEST_TMPDIR}/bin/brew$"
+assert_eq "$?" "0" "the fixture brew process is visible to ps"
+own_execs=$(_MAC_OPS_FC_RUNNING_EXECS=""; _mac_ops_fc_load_running_execs; print -r -- "${_MAC_OPS_FC_RUNNING_EXECS}")
+assert_output_not_contains "${own_execs}" "${TEST_TMPDIR}/bin/brew" "a brew started by this run is left out of the process list"
+assert_output_contains "${own_execs}" "/sbin/launchd" "other processes stay in the list"
+kill "${own_brew_pid}" 2>/dev/null
+wait "${own_brew_pid}" 2>/dev/null
+
+print ""
+
+# =============================================================================
+# /tmp: the path is given to find as is (a symlinked root is not followed,
+# as in main); agent scratch directories stay; files, not folders, are moved
 # =============================================================================
 print "[TEST] tmp_protection"
 
@@ -298,23 +403,26 @@ mkdir -p "${TMP_ROOT}/claude-501/session/scratchpad" "${TMP_ROOT}/Users/someone/
     "${TMP_ROOT}/Library/parked" "${TMP_ROOT}/.hidden-old"
 print "x" > "${TMP_ROOT}/claude-501/session/scratchpad/notes"
 print "x" > "${TMP_ROOT}/Users/someone/project/dist/bundle.js"
+print "x" > "${TMP_ROOT}/Library/parked/old-file"
 print "x" > "${TMP_ROOT}/Library/parked/new-file"
 print "x" > "${TMP_ROOT}/.hidden-old/file"
 make_old "${TMP_ROOT}/claude-501"
 make_old "${TMP_ROOT}/Users"
 make_old "${TMP_ROOT}/.hidden-old"
-touch -t "${OLD_STAMP}" "${TMP_ROOT}/Library"
+touch -t "${OLD_STAMP}" "${TMP_ROOT}/Library" "${TMP_ROOT}/Library/parked/old-file"
 
-# The scan root is reached through a symlink, like /tmp -> /private/tmp
 ln -s "${TMP_ROOT}" "${TEST_TMPDIR}/tmp-link"
 
 _MAC_OPS_FC_OPEN_PATHS="n/nonexistent/placeholder"
 tmp_output=$(_mac_ops_tmp_clean_path "${TEST_TMPDIR}/tmp-link" 3 "tmp-expired" 2>&1)
+assert_output_not_contains "${tmp_output}" "Will move to trash" "a symlinked scan root is not followed (main's find does not follow /tmp)"
 
-assert_survives "${tmp_output}" "${TMP_ROOT}/claude-501" "agent scratch directory" "claude-* scratch directory" "tmp-cleanup"
-assert_survives "${tmp_output}" "${TMP_ROOT}/Library" "used after" "parked directory with a fresh file" "tmp-cleanup"
-assert_moved "${tmp_output}" "${TMP_ROOT}/Users" "old parked directory (scan root given as a symlink)"
-assert_moved "${tmp_output}" "${TMP_ROOT}/.hidden-old" "old hidden directory"
+tmp_output=$(_mac_ops_tmp_clean_path "${TMP_ROOT}" 3 "tmp-expired" 2>&1)
+assert_survives "${tmp_output}" "${TMP_ROOT}/claude-501/session/scratchpad/notes" "agent scratch directory" "file in a claude-* scratch directory" "tmp-cleanup"
+assert_survives "${tmp_output}" "${TMP_ROOT}/Library/parked/old-file" "top-level item" "old file next to a fresh file" "tmp-cleanup"
+assert_moved "${tmp_output}" "${TMP_ROOT}/Users/someone/project/dist/bundle.js" "old parked file"
+assert_moved "${tmp_output}" "${TMP_ROOT}/.hidden-old/file" "old file in a hidden directory"
+assert_output_not_contains "${tmp_output}" "Will move to trash: ${TMP_ROOT}/Users " "a parked directory is not moved as a whole"
 
 # The open-file list cannot be built: nothing may be moved
 tmp_output=$(
@@ -436,6 +544,32 @@ seed_running "${IDLE_PROCESSES}
 /Applications/Xcode.app/Contents/MacOS/Xcode"
 dev_output=$(_mac_ops_dev_xcode 2>&1)
 assert_output_contains "${dev_output}" "skipped (dev-cleanup): Xcode caches (reason: Xcode is running)" "Xcode caches are skipped while Xcode runs"
+
+print ""
+
+# =============================================================================
+# Developer caches: dry-run lists what a real run would move, item by item
+# =============================================================================
+print "[TEST] dev_dry_run_matches_real_run"
+
+DERIVED="${HOME}/Library/Developer/Xcode/DerivedData"
+SIMCACHE="${HOME}/Library/Developer/CoreSimulator/Caches"
+mkdir -p "${DERIVED}/Idle-abc" "${DERIVED}/Held-def" "${SIMCACHE}/dyld" "${SIMCACHE}/held"
+print "x" > "${DERIVED}/Idle-abc/data"
+print "x" > "${DERIVED}/Held-def/data"
+print "x" > "${SIMCACHE}/dyld/data"
+print "x" > "${SIMCACHE}/held/data"
+
+seed_running "${IDLE_PROCESSES}"
+_MAC_OPS_FC_OPEN_PATHS="n/nonexistent/placeholder
+n${DERIVED}/Held-def/data
+n${SIMCACHE}/held/data"
+dev_output=$(_mac_ops_dev_xcode 2>&1)
+assert_moved "${dev_output}" "${DERIVED}/Idle-abc" "idle DerivedData item"
+assert_survives "${dev_output}" "${DERIVED}/Held-def" "open by a running process" "DerivedData item open in a process" "dev-cleanup"
+assert_moved "${dev_output}" "${SIMCACHE}/dyld" "idle simulator cache item"
+assert_survives "${dev_output}" "${SIMCACHE}/held" "open by a running process" "simulator cache item open in a process" "dev-cleanup"
+assert_output_not_contains "${dev_output}" "Will clean: ${DERIVED} " "dry-run does not announce the whole DerivedData folder"
 
 print ""
 

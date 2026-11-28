@@ -42,16 +42,16 @@ _mac_ops_dev_xcode() {
     derived_size=$(mac_ops_get_dir_size "${xcode_derived}")
 
     if [[ ${derived_size} -gt 0 ]]; then
-      if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-        mac_ops_log_info "[DRY_RUN] Will clean: ${xcode_derived} ($(mac_ops_format_bytes ${derived_size}))"
-      else
-        # Move all items in DerivedData to trash
-        for item in "${xcode_derived}"/*(N); do
-          [[ ! -e "${item}" ]] && continue
-          _mac_ops_fc_guard "${item}" "dev-cleanup" || continue
-          mac_ops_trash_move "${item}" "Xcode DerivedData cleanup" "dev-cleanup"
-        done
+      # Move all items in DerivedData to trash. Dry-run takes the same path,
+      # so it lists exactly the items a real run would move (trash_move only
+      # reports in dry-run).
+      for item in "${xcode_derived}"/*(N); do
+        [[ ! -e "${item}" ]] && continue
+        _mac_ops_fc_guard "${item}" "dev-cleanup" || continue
+        mac_ops_trash_move "${item}" "Xcode DerivedData cleanup" "dev-cleanup"
+      done
 
+      if [[ "${MAC_OPS_DRY_RUN}" != "true" ]]; then
         MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + derived_size))
         MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
         mac_ops_log_info "Xcode DerivedData cleanup completed: $(mac_ops_format_bytes ${derived_size})"
@@ -108,15 +108,14 @@ _mac_ops_dev_xcode() {
     sim_size=$(mac_ops_get_dir_size "${xcode_simulator}")
 
     if [[ ${sim_size} -gt 0 ]]; then
-      if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-        mac_ops_log_info "[DRY_RUN] Will clean: ${xcode_simulator} ($(mac_ops_format_bytes ${sim_size}))"
-      else
-        for item in "${xcode_simulator}"/*(N); do
-          [[ ! -e "${item}" ]] && continue
-          _mac_ops_fc_guard "${item}" "dev-cleanup" || continue
-          mac_ops_trash_move "${item}" "Xcode Simulator cache cleanup" "dev-cleanup"
-        done
+      # Dry-run takes the same path as a real run (see DerivedData above)
+      for item in "${xcode_simulator}"/*(N); do
+        [[ ! -e "${item}" ]] && continue
+        _mac_ops_fc_guard "${item}" "dev-cleanup" || continue
+        mac_ops_trash_move "${item}" "Xcode Simulator cache cleanup" "dev-cleanup"
+      done
 
+      if [[ "${MAC_OPS_DRY_RUN}" != "true" ]]; then
         MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + sim_size))
         MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))
         mac_ops_log_info "Xcode Simulator cache cleanup completed: $(mac_ops_format_bytes ${sim_size})"
@@ -497,18 +496,18 @@ _mac_ops_dev_cocoapods() {
     return 0
   fi
 
-  if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
-    mac_ops_log_info "[DRY_RUN] Will clean CocoaPods cache: ${pod_cache} ($(mac_ops_format_bytes ${cache_size}))"
-    return 0
-  fi
-
   mac_ops_log_info "Cleaning CocoaPods cache..."
 
+  # Dry-run takes the same path, so it lists exactly what a real run would move
   for item in "${pod_cache}"/*(N); do
     [[ ! -e "${item}" ]] && continue
     _mac_ops_fc_guard "${item}" "dev-cleanup" || continue
     mac_ops_trash_move "${item}" "CocoaPods cache cleanup" "dev-cleanup"
   done
+
+  if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
+    return 0
+  fi
 
   MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + cache_size))
   MAC_OPS_CLEANED_COUNT=$((MAC_OPS_CLEANED_COUNT + 1))

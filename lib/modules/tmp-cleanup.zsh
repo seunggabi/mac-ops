@@ -9,7 +9,7 @@ MAC_OPS_TMP_MAX_AGE_DAYS=${MAC_OPS_TMP_MAX_AGE_DAYS:-3}
 MAC_OPS_VAR_FOLDERS_MAX_AGE_DAYS=${MAC_OPS_VAR_FOLDERS_MAX_AGE_DAYS:-7}
 MAC_OPS_CRASH_MAX_AGE_DAYS=${MAC_OPS_CRASH_MAX_AGE_DAYS:-14}
 
-# --- Scan roots (overridable so tests can point the module at fixtures) ---
+# --- Scan roots (test-only: tests point the module at fixtures; not a user setting) ---
 MAC_OPS_TMP_DIR=${MAC_OPS_TMP_DIR:-/tmp}
 MAC_OPS_VAR_FOLDERS_DIR=${MAC_OPS_VAR_FOLDERS_DIR:-/private/var/folders}
 
@@ -30,6 +30,8 @@ MAC_OPS_SECURITY_KEYWORDS=(
 _MAC_OPS_FC_RUNNING_EXECS="${_MAC_OPS_FC_RUNNING_EXECS:-}"
 _MAC_OPS_FC_OPEN_PATHS="${_MAC_OPS_FC_OPEN_PATHS:-}"
 _MAC_OPS_FC_RUNNING_BUNDLES="${_MAC_OPS_FC_RUNNING_BUNDLES:-}"
+_MAC_OPS_FC_RUNNING_APP_NAMES="${_MAC_OPS_FC_RUNNING_APP_NAMES:-}"
+_MAC_OPS_FC_RUNNING_APPS_STATE="${_MAC_OPS_FC_RUNNING_APPS_STATE:-}"
 
 # -----------------------------------------------------------------------------
 # Return 0 if the path contains a security software keyword
@@ -93,20 +95,56 @@ _mac_ops_fc_live_entry() {
 }
 
 # -----------------------------------------------------------------------------
-# Build the list of running executables once per run (ps -eo comm=)
+# Build the list of running executables once per module (ps -eo comm=)
+# Processes started by this mac-ops run (its own brew, find, ps calls, in any
+# parallel module) are left out: they are not someone else using a cache.
+# A process is ours when walking its parent links reaches the run's PID ($$,
+# which stays the main shell's PID inside the module subshells).
 # Return 1 if the list cannot be built
 # -----------------------------------------------------------------------------
 _mac_ops_fc_load_running_execs() {
   local ps_out=""
+  local line="" pid="" ppid="" comm="" cur="" hops=0 ours=0
+  local -A parent_of=()
+  local -a lines=() kept=()
 
   if [[ -n "${_MAC_OPS_FC_RUNNING_EXECS}" ]]; then
     return 0
   fi
-  ps_out=$(ps -eo comm= 2>/dev/null)
+  ps_out=$(ps -eo pid=,ppid=,comm= 2>/dev/null)
   if [[ $? -ne 0 || -z "${ps_out}" ]]; then
     return 1
   fi
-  _MAC_OPS_FC_RUNNING_EXECS="${ps_out}"
+
+  lines=("${(@f)ps_out}")
+  for line in "${lines[@]}"; do
+    read -r pid ppid comm <<< "${line}"
+    [[ "${pid}" =~ ^[0-9]+$ && "${ppid}" =~ ^[0-9]+$ ]] && parent_of[${pid}]="${ppid}"
+  done
+
+  for line in "${lines[@]}"; do
+    read -r pid ppid comm <<< "${line}"
+    [[ -z "${comm}" ]] && continue
+
+    ours=0
+    cur="${pid}"
+    hops=0
+    while [[ -n "${cur}" && "${cur}" -gt 1 && ${hops} -lt 64 ]]; do
+      if [[ "${cur}" == "$$" ]]; then
+        ours=1
+        break
+      fi
+      cur="${parent_of[${cur}]:-}"
+      hops=$((hops + 1))
+    done
+    [[ ${ours} -eq 1 ]] && continue
+    kept+=("${comm}")
+  done
+
+  if [[ ${#kept[@]} -eq 0 ]]; then
+    return 1
+  fi
+  _MAC_OPS_FC_RUNNING_EXECS="${(F)kept}"
   return 0
 }
 
@@ -174,28 +212,97 @@ _mac_ops_fc_manager_running() {
 }
 
 # -----------------------------------------------------------------------------
-# Return 0 if the name is the bundle ID of a running app or one of its
-# sub-identifiers (com.example.app.helper for com.example.app).
-# The list is built once per run. It is empty outside a GUI session, so this
-# only adds to the open-file and recent-use checks, it never replaces them.
-# Usage: _mac_ops_fc_bundle_running <directory name>
+# Build the running-app set once per module:
+#   _MAC_OPS_FC_RUNNING_BUNDLES   bundle IDs (lsappinfo, plus the
+#                                 CFBundleIdentifier of every running .app)
+#   _MAC_OPS_FC_RUNNING_APP_NAMES app names of every running .app ("Telegram")
+# Return 1 if either source fails: the caller must then protect the item.
 # -----------------------------------------------------------------------------
-_mac_ops_fc_bundle_running() {
-  local name="${1}"
-  local bundle_id=""
+_mac_ops_fc_load_running_apps() {
+  local lsapp_out="" exec_path="" app_path="" bundle_id=""
+  local -a bundles=() names=()
+  local -A seen_app=()
 
-  if [[ -z "${_MAC_OPS_FC_RUNNING_BUNDLES}" ]]; then
-    _MAC_OPS_FC_RUNNING_BUNDLES=$(lsappinfo list 2>/dev/null | grep 'bundleID=' \
-      | sed 's/.*bundleID="\([^"]*\)".*/\1/' | grep -v '^\[' | sort -u)
-    _MAC_OPS_FC_RUNNING_BUNDLES="${_MAC_OPS_FC_RUNNING_BUNDLES:-none}"
+  case "${_MAC_OPS_FC_RUNNING_APPS_STATE:-}" in
+    ok)          return 0 ;;
+    unavailable) return 1 ;;
+  esac
+  _MAC_OPS_FC_RUNNING_APPS_STATE="unavailable"
+
+  # 1. Bundle IDs from Launch Services (tests may pre-seed the list)
+  if [[ -n "${_MAC_OPS_FC_RUNNING_BUNDLES}" ]]; then
+    bundles=("${(@f)_MAC_OPS_FC_RUNNING_BUNDLES}")
+  else
+    lsapp_out=$(lsappinfo list 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
+      return 1
+    fi
+    bundles=("${(@f)$(print -r -- "${lsapp_out}" | grep 'bundleID="' \
+      | sed 's/.*bundleID="\([^"]*\)".*/\1/' | grep -v '^\[')}")
+    bundles=("${(@)bundles:#}")
+    if [[ ${#bundles[@]} -eq 0 ]]; then
+      return 1
+    fi
   fi
 
-  while IFS= read -r bundle_id; do
+  # 2. Every running .app from the executable paths
+  if ! _mac_ops_fc_load_running_execs; then
+    return 1
+  fi
+  for exec_path in "${(@f)_MAC_OPS_FC_RUNNING_EXECS}"; do
+    [[ "${exec_path}" == /*.app/* ]] || continue
+    app_path="${exec_path%%.app/*}.app"
+    [[ -n "${seen_app[${app_path}]:-}" ]] && continue
+    seen_app[${app_path}]=1
+    names+=("${${app_path:t}%.app}")
+    bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+      "${app_path}/Contents/Info.plist" 2>/dev/null)
+    [[ -n "${bundle_id}" ]] && bundles+=("${bundle_id}")
+  done
+
+  _MAC_OPS_FC_RUNNING_BUNDLES="${(F)${(@u)bundles}}"
+  _MAC_OPS_FC_RUNNING_APP_NAMES="${(F)${(@u)names}}"
+  _MAC_OPS_FC_RUNNING_APPS_STATE="ok"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Return 0 if a directory name belongs to a running app, 1 if not,
+# 2 if the running-app set cannot be built (callers treat 2 like 0).
+# A name matches (case-insensitively) a running app's bundle ID or a
+# sub-identifier of it (com.example.app.helper), the bundle ID's first two
+# labels or anything below them (com.example.*), or the app's name (Telegram).
+# Usage: _mac_ops_fc_app_running <directory name>
+# -----------------------------------------------------------------------------
+_mac_ops_fc_app_running() {
+  local name="${1:l}"
+  local bundle_id="" vendor="" app_name=""
+  local -a labels=()
+
+  if ! _mac_ops_fc_load_running_apps; then
+    return 2
+  fi
+
+  for bundle_id in "${(@f)_MAC_OPS_FC_RUNNING_BUNDLES:l}"; do
     [[ -z "${bundle_id}" ]] && continue
     if [[ "${name}" == "${bundle_id}" || "${name}" == "${bundle_id}."* ]]; then
       return 0
     fi
-  done <<< "${_MAC_OPS_FC_RUNNING_BUNDLES}"
+    labels=("${(@s:.:)bundle_id}")
+    if [[ ${#labels[@]} -ge 3 ]]; then
+      vendor="${labels[1]}.${labels[2]}"
+      if [[ "${name}" == "${vendor}" || "${name}" == "${vendor}."* ]]; then
+        return 0
+      fi
+    fi
+  done
+
+  for app_name in "${(@f)_MAC_OPS_FC_RUNNING_APP_NAMES:l}"; do
+    [[ -z "${app_name}" ]] && continue
+    if [[ "${name}" == "${app_name}" ]]; then
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -330,115 +437,187 @@ _mac_ops_tmp_protected_name() {
 }
 
 # -----------------------------------------------------------------------------
-# Internal: Cleanup stale top-level items of the specified directory
-# An item is moved as a whole, and only when nothing inside it was modified or
-# read within the threshold (a directory's own mtime says nothing about use).
+# Internal: Set _MAC_OPS_TMP_TOP_REASON to why a top-level item is protected
+# (empty = not protected). Runs in the caller's shell so the per-module
+# process, open-file and running-app lists are built once, not per item.
+# Checks: owning app running (or the running-app set unavailable), then the
+# shared guard (security path, socket/FIFO, open, used after the cutoff).
+# Usage: _mac_ops_tmp_top_reason <top-level item> <cutoff timestamp>
+# -----------------------------------------------------------------------------
+_mac_ops_tmp_top_reason() {
+  local top="${1}"
+  local cutoff="${2}"
+  local rc=0
+
+  _MAC_OPS_TMP_TOP_REASON=""
+  _mac_ops_fc_app_running "${top:t}"
+  rc=$?
+  if [[ ${rc} -eq 0 ]]; then
+    _MAC_OPS_TMP_TOP_REASON="owning app is running"
+    return 0
+  elif [[ ${rc} -ne 1 ]]; then
+    _MAC_OPS_TMP_TOP_REASON="running-app list unavailable"
+    return 0
+  fi
+
+  if ! _mac_ops_fc_guard "${top}" "tmp-cleanup" "${cutoff}"; then
+    _MAC_OPS_TMP_TOP_REASON="in use or protected"
+  fi
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Move the old files a find produced, after the protections.
+# The candidate list is exactly what the released version selected (old regular
+# files from the same find); the protections only ever remove candidates.
+# Each candidate is checked by every path component below the top-level item
+# (a nested com.apple.* directory protects what is inside it), by its top-level
+# item (checked once and cached), and by itself.
+# Usage: _mac_ops_tmp_clean_candidates <file list> <scan root> <top depth> \
+#          <max_days> <reason> <label>
+#   top depth: number of path components below <scan root> that name the
+#   top-level item (1 for /tmp, 4 for /private/var/folders/xx/yyy/T/<item>)
+# -----------------------------------------------------------------------------
+_mac_ops_tmp_clean_candidates() {
+  local file_list="${1}"
+  local scan_root="${2%/}"
+  local top_depth="${3}"
+  local max_age_days="${4}"
+  local reason="${5}"
+  local label="${6}"
+  local file_path="" rel="" top="" part="" name_reason="" top_reason="" cutoff=""
+  local count=0
+  local file_size=0
+  local -a parts=()
+  local -A top_reasons=()
+
+  cutoff=$(_mac_ops_fc_cutoff_time "${max_age_days}")
+  if [[ $? -ne 0 || -z "${cutoff}" ]]; then
+    mac_ops_log_warn "Cannot compute age cutoff (${max_age_days} days), skipping: ${label}"
+    return 0
+  fi
+
+  count=0
+  while IFS= read -r file_path; do
+    [[ -z "${file_path}" ]] && continue
+
+    rel="${file_path#${scan_root}/}"
+    parts=("${(@s:/:)rel}")
+    if [[ ${#parts[@]} -gt ${top_depth} ]]; then
+      top="${scan_root}/${(j:/:)parts[1,${top_depth}]}"
+    else
+      top="${file_path}"
+    fi
+
+    # Protected by the name of the top-level item or of anything below it
+    name_reason=""
+    for part in "${(@)parts[$(( ${#parts[@]} < top_depth ? ${#parts[@]} : top_depth )),-1]}"; do
+      name_reason=$(_mac_ops_tmp_protected_name "${part}")
+      [[ -n "${name_reason}" ]] && break
+    done
+    if [[ -n "${name_reason}" ]]; then
+      mac_ops_log_debug "Protected, skipped (tmp-cleanup): ${file_path} (reason: ${name_reason})"
+      continue
+    fi
+
+    # Only files owned by the current user (others cannot be moved without sudo)
+    if [[ ! -O "${file_path}" ]]; then
+      mac_ops_log_debug "Protected, skipped (tmp-cleanup): ${file_path} (reason: not owned by ${USER})"
+      continue
+    fi
+
+    # The top-level item: owning app running, in use, security software
+    if [[ -z "${top_reasons[${top}]+set}" ]]; then
+      _mac_ops_tmp_top_reason "${top}" "${cutoff}"
+      top_reasons[${top}]="${_MAC_OPS_TMP_TOP_REASON}"
+    fi
+    top_reason="${top_reasons[${top}]}"
+    if [[ -n "${top_reason}" ]]; then
+      mac_ops_log_debug "Protected, skipped (tmp-cleanup): ${file_path} (reason: top-level item ${top}: ${top_reason})"
+      continue
+    fi
+
+    # The file itself: security software, open by a process, read recently
+    if [[ "${top}" != "${file_path}" ]] && ! _mac_ops_fc_guard "${file_path}" "tmp-cleanup" "${cutoff}"; then
+      continue
+    fi
+
+    # Safety check
+    if ! mac_ops_is_path_safe "${file_path}"; then
+      continue
+    fi
+
+    # Size guard check
+    if ! mac_ops_check_size_guard "${file_path}"; then
+      continue
+    fi
+
+    # User ignore rules: path pattern
+    if mac_ops_ignore_check_path "${file_path}"; then
+      mac_ops_log_debug "User ignore (path): ${file_path}"
+      continue
+    fi
+
+    # Record file size
+    file_size=$(mac_ops_get_dir_size "${file_path}")
+
+    # Move to trash
+    if mac_ops_trash_move "${file_path}" "${reason}" "tmp-cleanup"; then
+      MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
+      MAC_OPS_CLEANED_BYTES=$((${MAC_OPS_CLEANED_BYTES:-0} + file_size))
+      count=$((count + 1))
+    fi
+  done <<< "${file_list}"
+
+  mac_ops_log_info "${label}: ${count} files cleaned"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Internal: Search and cleanup old files in specified path
+# The candidates are the released version's: old regular files up to depth 5.
+# The path is passed to find as given (a symlinked root such as /tmp is not
+# followed, exactly as before).
 # Usage: _mac_ops_tmp_clean_path <path> <max_days> <reason>
 # -----------------------------------------------------------------------------
 _mac_ops_tmp_clean_path() {
   local target_dir="${1}"
   local max_age_days="${2}"
   local reason="${3}"
-  local item=""
-  local name_reason=""
-  local cutoff=""
-  local inner_file=""
-  local count=0
-  local file_size=0
+  local file_list=""
 
   if [[ ! -d "${target_dir}" ]]; then
     mac_ops_log_debug "Path does not exist: ${target_dir}"
     return 0
   fi
 
-  # Resolve symlinks (/tmp -> /private/tmp) so items match the open-file list
-  target_dir="${target_dir:A}"
+  mac_ops_log_info "${target_dir} cleanup started (threshold: ${max_age_days} days or older)"
 
-  cutoff=$(_mac_ops_fc_cutoff_time "${max_age_days}")
-  if [[ $? -ne 0 || -z "${cutoff}" ]]; then
-    mac_ops_log_warn "Cannot compute age cutoff (${max_age_days} days), skipping: ${target_dir}"
+  # Search old files with find (based on modification time)
+  # Prevent too deep search with -maxdepth limit
+  file_list=$(find "${target_dir}" -maxdepth 5 -type f -mtime "+${max_age_days}" 2>/dev/null)
+
+  if [[ -z "${file_list}" ]]; then
+    mac_ops_log_debug "${target_dir}: No cleanup targets"
     return 0
   fi
 
-  mac_ops_log_info "${target_dir} cleanup started (threshold: ${max_age_days} days or older)"
-
-  count=0
-  for item in "${target_dir}"/*(DN); do
-    # Protected by name
-    name_reason=$(_mac_ops_tmp_protected_name "${item:t}")
-    if [[ -n "${name_reason}" ]]; then
-      mac_ops_log_debug "Protected, skipped (tmp-cleanup): ${item} (reason: ${name_reason})"
-      continue
-    fi
-
-    # Per-app temp/cache directory of an app that is running
-    if _mac_ops_fc_bundle_running "${item:t}"; then
-      mac_ops_log_debug "Protected, skipped (tmp-cleanup): ${item} (reason: owning app is running)"
-      continue
-    fi
-
-    # Only items owned by the current user (others cannot be moved without sudo)
-    if [[ ! -O "${item}" ]]; then
-      mac_ops_log_debug "Protected, skipped (tmp-cleanup): ${item} (reason: not owned by ${USER})"
-      continue
-    fi
-
-    # Security software, socket/FIFO, open by a process, recently used inside
-    if ! _mac_ops_fc_guard "${item}" "tmp-cleanup" "${cutoff}"; then
-      continue
-    fi
-
-    # A directory tree without files frees nothing, and daemons keep such
-    # directories as their temp roots (a failed search is treated the same)
-    if [[ -d "${item}" && ! -L "${item}" ]]; then
-      inner_file=$(find "${item}" -type f -print -quit 2>/dev/null)
-      if [[ -z "${inner_file}" ]]; then
-        mac_ops_log_debug "Protected, skipped (tmp-cleanup): ${item} (reason: no files inside, nothing to free)"
-        continue
-      fi
-    fi
-
-    # Safety check
-    if ! mac_ops_is_path_safe "${item}"; then
-      continue
-    fi
-
-    # Size guard check
-    if ! mac_ops_check_size_guard "${item}"; then
-      continue
-    fi
-
-    # User ignore rules: path pattern
-    if mac_ops_ignore_check_path "${item}"; then
-      mac_ops_log_debug "User ignore (path): ${item}"
-      continue
-    fi
-
-    # Record item size
-    file_size=$(mac_ops_get_dir_size "${item}")
-
-    # Move to trash
-    if mac_ops_trash_move "${item}" "${reason}" "tmp-cleanup"; then
-      MAC_OPS_CLEANED_COUNT=$((${MAC_OPS_CLEANED_COUNT:-0} + 1))
-      MAC_OPS_CLEANED_BYTES=$((${MAC_OPS_CLEANED_BYTES:-0} + file_size))
-      count=$((count + 1))
-    fi
-  done
-
-  mac_ops_log_info "${target_dir}: ${count} items cleaned"
+  _mac_ops_tmp_clean_candidates "${file_list}" "${target_dir}" 1 \
+    "${max_age_days}" "${reason}" "${target_dir}"
   return 0
 }
 
 # -----------------------------------------------------------------------------
 # Internal: Cleanup /private/var/folders user area
-# Process only the current user's T (temp), C (cache) and X directories
+# The candidates are the released version's: old regular files of the current
+# user up to depth 6. The top-level item of a candidate is
+# /private/var/folders/xx/yyy/<T|C|X|0>/<item>.
 # Usage: _mac_ops_tmp_clean_var_folders <max_days>
 # -----------------------------------------------------------------------------
 _mac_ops_tmp_clean_var_folders() {
   local max_age_days="${1}"
   local var_folders="${MAC_OPS_VAR_FOLDERS_DIR}"
-  local user_dir=""
-  local sub=""
+  local file_list=""
 
   if [[ ! -d "${var_folders}" ]]; then
     mac_ops_log_debug "Path does not exist: ${var_folders}"
@@ -447,16 +626,17 @@ _mac_ops_tmp_clean_var_folders() {
 
   mac_ops_log_info "${var_folders} cleanup started (threshold: ${max_age_days} days or older)"
 
-  for user_dir in "${var_folders}"/*/*(/N); do
-    # Other users' folders are not accessible without sudo
-    [[ -O "${user_dir}" ]] || continue
+  # Search only files accessible by current user
+  # Ignore permission errors with 2>/dev/null instead of -readable
+  file_list=$(find "${var_folders}" -maxdepth 6 -type f -mtime "+${max_age_days}" \
+    -user "${USER}" 2>/dev/null)
 
-    for sub in T C X; do
-      if [[ -d "${user_dir}/${sub}" ]]; then
-        _mac_ops_tmp_clean_path "${user_dir}/${sub}" "${max_age_days}" "var-folders-expired"
-      fi
-    done
-  done
+  if [[ -z "${file_list}" ]]; then
+    mac_ops_log_debug "${var_folders}: No cleanup targets"
+    return 0
+  fi
 
+  _mac_ops_tmp_clean_candidates "${file_list}" "${var_folders}" 4 \
+    "${max_age_days}" "var-folders-expired" "${var_folders}"
   return 0
 }
