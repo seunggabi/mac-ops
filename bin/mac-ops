@@ -173,10 +173,11 @@ _mac_ops_cmd_run() {
   mac_ops_print_report "${snapshot_before}" "${snapshot_after}" "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}" "${MAC_OPS_DATA_MOVED_COUNT}"
 
   # 13. macOS notification (scheduled mode)
-  local before_disk_pct after_disk_pct
-  before_disk_pct="${snapshot_before%% *}"
-  after_disk_pct="${snapshot_after%% *}"
-  mac_ops_notify_completion "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}" "${before_disk_pct}" "${after_disk_pct}" "${MAC_OPS_DATA_MOVED_COUNT}"
+  # Free bytes (df -k) are the second snapshot field
+  local before_free after_free _pct _rest
+  read -r _pct before_free _rest <<< "${snapshot_before}"
+  read -r _pct after_free _rest <<< "${snapshot_after}"
+  mac_ops_notify_completion "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}" "${before_free}" "${after_free}" "${MAC_OPS_DATA_MOVED_COUNT}"
 }
 
 # =============================================================================

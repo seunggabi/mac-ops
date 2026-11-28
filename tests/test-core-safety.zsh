@@ -715,6 +715,46 @@ test_data_move_count_survives_parallel_stats() {
 test_data_move_logged_and_counted
 test_data_move_count_survives_parallel_stats
 
+print ""
+
+# =============================================================================
+# Honest numbers (item 10): trashed bytes are not "freed"; real df change
+# =============================================================================
+source "${MAC_OPS_ROOT}/lib/utils/notify.zsh"
+
+test_report_wording_honest() {
+    print "[TEST] report_wording_honest"
+    local out
+    out=$(MAC_OPS_TRASH_RETENTION_HOURS=48 mac_ops_print_report "10 5000000 0 0" "10 5000000 0 0" "4" "2097152" "0" "0")
+    assert_output_contains "${out}" "4 items (2.0 MB) moved to trash (purged after 48 hours)" "summary says moved to trash with the retention setting"
+    assert_output_not_contains "${out}" "cleaned:" "summary no longer says files cleaned"
+    assert_output_contains "${out}" "free space not increased yet (space is reclaimed when the trash is purged)" "zero df change: reclaimed at purge"
+    out=$(mac_ops_print_report "10 5000000 0 0" "10 4000000 0 0" "1" "10" "0")
+    assert_output_contains "${out}" "free space not increased yet" "negative df change: reclaimed at purge"
+    out=$(mac_ops_print_report "10 1048576 0 0" "9 4194304 0 0" "1" "10" "0")
+    assert_output_contains "${out}" "free space +3.0 MB" "positive df change reported separately"
+    out=$(MAC_OPS_DRY_RUN=true mac_ops_print_report "10 1 0 0" "10 1 0 0" "2" "10" "0")
+    assert_output_contains "${out}" "would be moved to trash (dry run)" "dry-run summary does not claim a move"
+}
+
+test_notify_message_honest() {
+    print "[TEST] notify_message_honest"
+    local msg
+    msg=$(MAC_OPS_TRASH_RETENTION_HOURS=72 mac_ops_notify_message "5" "1048576" "2" "1000000" "1000000" "1")
+    assert_output_contains "${msg}" "5 items (1.0 MB) moved to trash (purged after 72 hours)" "notification says moved to trash"
+    assert_output_contains "${msg}" "1 data items moved" "notification includes data items moved"
+    assert_output_contains "${msg}" "2 processes terminated" "notification includes terminated processes"
+    assert_output_contains "${msg}" "space is reclaimed when the trash is purged" "notification: no df gain, reclaimed at purge"
+    assert_output_not_contains "${msg}" "freed" "notification never says freed"
+    msg=$(mac_ops_notify_message "1" "10" "0" "1048576" "3145728" "0")
+    assert_output_contains "${msg}" "free space +2.0 MB" "notification reports real df gain"
+    msg=$(mac_ops_notify_message "0" "0" "0" "1" "1" "0")
+    assert_eq "${msg}" "" "nothing to report: empty message"
+}
+
+test_report_wording_honest
+test_notify_message_honest
+
 # --- Teardown ---
 rm -rf "${TEST_TMPDIR}"
 

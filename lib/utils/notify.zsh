@@ -24,30 +24,25 @@ mac_ops_notify() {
   return 0
 }
 
-# Cleanup completion notification
-# Args: cleaned_count, cleaned_bytes, killed_procs, disk_before_pct (optional), disk_after_pct (optional),
-#       data_moved (optional: items moved out of settings/app-data areas)
-# Do not notify if no items were cleaned (count is 0)
-mac_ops_notify_completion() {
+# Build the completion notification text (no side effects; testable)
+# Args: cleaned_count, cleaned_bytes, killed_procs, free_before_bytes (optional),
+#       free_after_bytes (optional), data_moved (optional)
+# Prints the message; prints nothing when there is nothing to report
+mac_ops_notify_message() {
   local cleaned_count="$1"
   local cleaned_bytes="$2"
   local killed_procs="$3"
-  local disk_before_pct="${4:-}"
-  local disk_after_pct="${5:-}"
+  local free_before="${4:-}"
+  local free_after="${5:-}"
   local data_moved="${6:-0}"
-  local formatted_size
   local message_parts=()
-  local message
 
-  # Do not notify if no items were cleaned
-  if [[ "$cleaned_count" == "0" && "$killed_procs" == "0" ]]; then
+  if [[ "${cleaned_count:-0}" == "0" && "${killed_procs:-0}" == "0" ]]; then
     return 0
   fi
 
-  # Compose message
   if [[ -n "$cleaned_count" && "$cleaned_count" != "0" ]]; then
-    formatted_size=$(mac_ops_format_bytes "$cleaned_bytes")
-    message_parts+=("${cleaned_count} files cleaned, ${formatted_size} freed")
+    message_parts+=("$(mac_ops_trash_summary_text "$cleaned_count" "$cleaned_bytes")")
   fi
 
   if [[ -n "$data_moved" && "$data_moved" != "0" ]]; then
@@ -58,19 +53,20 @@ mac_ops_notify_completion() {
     message_parts+=("${killed_procs} processes terminated")
   fi
 
-  if [[ -n "$disk_before_pct" && -n "$disk_after_pct" && "$disk_before_pct" != "$disk_after_pct" ]]; then
-    local disk_change=$((disk_before_pct - disk_after_pct))
-    if (( disk_change > 0 )); then
-      message_parts+=("Disk: ${disk_before_pct}% → ${disk_after_pct}% (${disk_change}% freed)")
-    else
-      message_parts+=("Disk: ${disk_before_pct}% → ${disk_after_pct}%")
-    fi
+  if [[ -n "$free_before" && -n "$free_after" ]]; then
+    message_parts+=("$(mac_ops_free_change_text "$free_before" "$free_after")")
   fi
 
-  # Join message parts
   # shellcheck disable=SC2296
-  message="${(j:, :)message_parts}"
+  print -r -- "${(j:, :)message_parts}"
+}
 
-  # Send notification
+# Cleanup completion notification
+# Args: same as mac_ops_notify_message
+# Do not notify if no items were cleaned (count is 0)
+mac_ops_notify_completion() {
+  local message
+  message=$(mac_ops_notify_message "$@")
+  [[ -z "$message" ]] && return 0
   mac_ops_notify "Mac-Ops Cleanup Completed" "$message"
 }
