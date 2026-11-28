@@ -75,8 +75,7 @@ mac-ops/
 │       ├── format.zsh             # 사람이 읽기 좋은 크기 표시, 색상
 │       └── parallel.zsh           # 백그라운드 작업 오케스트레이션
 ├── config/
-│   ├── default.plist              # 기본 설정
-│   └── protected-processes.plist  # 보호 프로세스 목록
+│   └── default.plist              # 기본 설정
 ├── launchd/
 │   └── com.mac-ops.cleanup.plist  # launchd 에이전트 정의
 ├── tests/

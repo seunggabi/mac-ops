@@ -926,6 +926,21 @@ test_trash_move_vanished_source() {
 }
 test_trash_move_vanished_source
 
+# System daemons are protected processes (the list once kept in an unread
+# config/protected-processes.plist)
+test_protected_system_processes() {
+    print "[TEST] test_protected_system_processes"
+    local p
+    for p in kernel_task launchd WindowServer diskarbitrationd configd UserEventAgent trustd securityd syslogd notifyd logd powerd; do
+        mac_ops_is_process_protected "${p}" >/dev/null 2>&1
+        assert_eq "$?" "1" "protected process: ${p}"
+    done
+    mac_ops_is_process_protected "SomeUserApp" >/dev/null 2>&1
+    assert_eq "$?" "0" "an ordinary process is not protected"
+    assert_eq "$([[ -e "${MAC_OPS_ROOT}/config/protected-processes.plist" ]] && print present || print gone)" "gone" "unread protected-processes.plist is removed"
+}
+test_protected_system_processes
+
 print ""
 
 # =============================================================================

@@ -81,6 +81,7 @@ MAC_OPS_SELF_PROTECTED_EXTRA=(
 )
 
 # --- Processes that must never be terminated ---
+# (the only list: config/protected-processes.plist was never read and is gone)
 MAC_OPS_PROTECTED_PROCESSES=(
   "kernel_task"
   "launchd"
@@ -94,6 +95,15 @@ MAC_OPS_PROTECTED_PROCESSES=(
   "Dock"
   "coreaudiod"
   "opendirectoryd"
+  "diskarbitrationd"
+  "configd"
+  "UserEventAgent"
+  "trustd"
+  "securityd"
+  "syslogd"
+  "notifyd"
+  "logd"
+  "powerd"
 )
 
 # --- Size limit ---
