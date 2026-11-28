@@ -306,6 +306,268 @@ done
 assert_eq "${mism}" "" "config/default.plist lists every setting with its default"
 
 print ""
+# =============================================================================
+# Trash nesting (item 5): libraries sourced into this shell, own fixture home
+# =============================================================================
+export HOME="${TEST_TMPDIR}/t5-home"
+export MAC_OPS_HOME="${TEST_TMPDIR}/t5-ops"
+export MAC_OPS_TRASH_DIR="${MAC_OPS_HOME}/.trash"
+export MAC_OPS_META_DIR="${MAC_OPS_HOME}/.metadata"
+export MAC_OPS_LOG_DIR="${MAC_OPS_HOME}/.logs"
+export MAC_OPS_LOCK_FILE="${MAC_OPS_HOME}/mac-ops.lock"
+export MAC_OPS_CONFIG_FILE="${MAC_OPS_HOME}/config.plist"
+export MAC_OPS_DRY_RUN=false
+export MAC_OPS_VERBOSE=true
+export MAC_OPS_FORCE=false
+export MAC_OPS_SCHEDULED=false
+export MAC_OPS_TRASH_RETENTION_HOURS=72
+# Fixture files are never open; do not depend on lsof here
+export MAC_OPS_TRASH_SKIP_OPEN_DIRS=false
+mkdir -p "${HOME}"
+
+# --- Module loading ---
+source "${MAC_OPS_ROOT}/lib/core/config.zsh"
+source "${MAC_OPS_ROOT}/lib/core/logger.zsh"
+source "${MAC_OPS_ROOT}/lib/core/lock.zsh"
+source "${MAC_OPS_ROOT}/lib/core/trash.zsh"
+source "${MAC_OPS_ROOT}/lib/core/safety.zsh"
+source "${MAC_OPS_ROOT}/lib/core/disk.zsh"
+source "${MAC_OPS_ROOT}/lib/utils/plist-helper.zsh"
+source "${MAC_OPS_ROOT}/lib/utils/format.zsh"
+
+mac_ops_init_dirs
+
+PAST_ISO="2020-01-01T00:00:00Z"
+FUTURE_ISO="2099-01-01T00:00:00Z"
+
+# --- Helpers ---
+# Empty the trash and its index
+_t5_reset_trash() {
+    # Settings this section depends on (independent of the file preamble)
+    export MAC_OPS_DRY_RUN=false MAC_OPS_SCHEDULED=false MAC_OPS_TRASH_SKIP_OPEN_DIRS=false
+    rm -rf -- "${MAC_OPS_TRASH_DIR}"
+    mkdir -p "${MAC_OPS_TRASH_DIR}"
+    _mac_ops_index_reset
+    mac_ops_index_write
+}
+
+# Key of the newest record for an original path ("" if none). Result in REPLY.
+_t5_key_for() {
+    local k
+    REPLY=""
+    mac_ops_index_read
+    for k in "${_MAC_OPS_IDX_KEYS[@]}"; do
+        [[ "${_MAC_OPS_IDX_ORIG[${k}]}" == "$1" ]] && REPLY="${k}"
+    done
+}
+
+# Set expire_after of one record
+_t5_set_expire() {
+    mac_ops_index_read
+    _MAC_OPS_IDX_EXPIRE[$1]="$2"
+    mac_ops_index_write
+}
+
+# Add a record directly (simulates an index written by an older version)
+_t5_add_record() {
+    _MAC_OPS_IDX_KEYS+=("$1")
+    _MAC_OPS_IDX_ORIG[$1]="$2"
+    _MAC_OPS_IDX_TRASH[$1]="$3"
+    _MAC_OPS_IDX_REASON[$1]="test"
+    _MAC_OPS_IDX_MODULE[$1]="test-module"
+    _MAC_OPS_IDX_TIME[$1]="2026-01-01T00:00:00Z"
+    _MAC_OPS_IDX_SIZE[$1]=1
+    _MAC_OPS_IDX_EXPIRE[$1]="$4"
+}
+
+_t5_record_count() {
+    mac_ops_index_read
+    REPLY=${#_MAC_OPS_IDX_KEYS[@]}
+}
+
+_t5_has_key() {
+    mac_ops_index_read
+    if [[ -n "${_MAC_OPS_IDX_ORIG[$1]+_}" ]]; then REPLY=yes; else REPLY=no; fi
+}
+
+print ""
+
+# === Trash nesting (item 5) ===
+
+# Trash X, recreate X/sub, trash it: the second entry must not land inside
+# the first, and expiring only the first must keep sub and its record.
+test_trash_nested_entry_survives_parent_expiry() {
+    print "[TEST] test_trash_nested_entry_survives_parent_expiry"
+    _t5_reset_trash
+    local x="${TEST_TMPDIR}/files/X"
+    mkdir -p "${x}"
+    print "outer" > "${x}/outer.txt"
+    mac_ops_trash_move "${x}" "test" "test-module" >/dev/null 2>&1
+    _t5_key_for "${x}"; local key_x="${REPLY}"
+
+    mkdir -p "${x}/sub"
+    print "inner" > "${x}/sub/inner.txt"
+    mac_ops_trash_move "${x}/sub" "test" "test-module" >/dev/null 2>&1
+    _t5_key_for "${x}/sub"; local key_sub="${REPLY}"
+
+    mac_ops_index_read
+    local tp_x="${_MAC_OPS_IDX_TRASH[${key_x}]}"
+    local tp_sub="${_MAC_OPS_IDX_TRASH[${key_sub}]}"
+    local nested=no
+    [[ "${tp_sub}" == "${tp_x}/"* ]] && nested=yes
+    assert_eq "${nested}" "no" "re-trashed child is not placed inside the parent's entry"
+
+    _t5_set_expire "${key_x}" "${PAST_ISO}"
+    mac_ops_trash_expire >/dev/null 2>&1
+
+    local content=""
+    content=$(cat "${tp_sub}/inner.txt" 2>/dev/null)
+    assert_eq "${content}" "inner" "child content survives the parent's expiry"
+    _t5_has_key "${key_sub}"
+    assert_eq "${REPLY}" "yes" "child record remains until its own expiry"
+    _t5_has_key "${key_x}"
+    assert_eq "${REPLY}" "no" "expired parent record is dropped"
+    local gone=yes
+    [[ -e "${tp_x}/outer.txt" ]] && gone=no
+    assert_eq "${gone}" "yes" "expired parent content is deleted"
+}
+
+# An index from an older version with the child already nested inside the
+# parent's entry: the parent is postponed while the child is live.
+test_trash_nested_legacy_parent_postponed() {
+    print "[TEST] test_trash_nested_legacy_parent_postponed"
+    _t5_reset_trash
+    local orig="${TEST_TMPDIR}/files/L"
+    local tp="${MAC_OPS_TRASH_DIR}${orig}"
+    mkdir -p "${tp}/sub"
+    print "outer" > "${tp}/outer.txt"
+    print "inner" > "${tp}/sub/inner.txt"
+    mac_ops_index_read
+    _t5_add_record "aaa_20260101000000" "${orig}" "${tp}" "${PAST_ISO}"
+    _t5_add_record "bbb_20260101000001" "${orig}/sub" "${tp}/sub" "${FUTURE_ISO}"
+    mac_ops_index_write
+
+    local out
+    out=$(mac_ops_trash_expire 2>&1)
+    local content=""
+    content=$(cat "${tp}/sub/inner.txt" 2>/dev/null)
+    assert_eq "${content}" "inner" "nested live entry is not deleted with its expired parent"
+    _t5_has_key "bbb_20260101000001"
+    assert_eq "${REPLY}" "yes" "nested live record remains"
+    _t5_has_key "aaa_20260101000000"
+    assert_eq "${REPLY}" "yes" "postponed parent record is kept"
+    assert_output_contains "${out}" "postponed" "postponement is logged"
+
+    # Once the child expires too, both go
+    _t5_set_expire "bbb_20260101000001" "${PAST_ISO}"
+    mac_ops_trash_expire >/dev/null 2>&1
+    local gone=yes
+    [[ -e "${tp}" ]] && gone=no
+    assert_eq "${gone}" "yes" "parent is deleted once nothing live is inside"
+    _t5_record_count
+    assert_eq "${REPLY}" "0" "both records dropped after both expired"
+}
+
+# Several records sharing one trash path: deleted only after the last expires
+test_trash_shared_path_waits_for_last_record() {
+    print "[TEST] test_trash_shared_path_waits_for_last_record"
+    _t5_reset_trash
+    local orig="${TEST_TMPDIR}/files/S"
+    local tp="${MAC_OPS_TRASH_DIR}${orig}"
+    mkdir -p "${tp}"
+    print "shared" > "${tp}/data.txt"
+    mac_ops_index_read
+    _t5_add_record "ccc_20260101000000" "${orig}" "${tp}" "${PAST_ISO}"
+    _t5_add_record "ccc_20260101000001" "${orig}" "${tp}" "${PAST_ISO}"
+    _t5_add_record "ccc_20260101000002" "${orig}" "${tp}" "${FUTURE_ISO}"
+    mac_ops_index_write
+
+    mac_ops_trash_expire >/dev/null 2>&1
+    local content=""
+    content=$(cat "${tp}/data.txt" 2>/dev/null)
+    assert_eq "${content}" "shared" "shared path survives while one record is live"
+    _t5_record_count
+    assert_eq "${REPLY}" "3" "all shared records kept while one is live"
+
+    # Dry-run: nothing deleted, index unchanged
+    _t5_set_expire "ccc_20260101000002" "${PAST_ISO}"
+    MAC_OPS_DRY_RUN=true mac_ops_trash_expire >/dev/null 2>&1
+    content=$(cat "${tp}/data.txt" 2>/dev/null)
+    assert_eq "${content}" "shared" "dry-run deletes nothing"
+    _t5_record_count
+    assert_eq "${REPLY}" "3" "dry-run does not rewrite the index"
+
+    mac_ops_trash_expire >/dev/null 2>&1
+    local gone=yes
+    [[ -e "${tp}" ]] && gone=no
+    assert_eq "${gone}" "yes" "shared path deleted after the last record expired"
+    _t5_record_count
+    assert_eq "${REPLY}" "0" "all shared records dropped"
+}
+
+# A new move never reuses a path an index record still claims
+test_trash_move_avoids_indexed_path() {
+    print "[TEST] test_trash_move_avoids_indexed_path"
+    _t5_reset_trash
+    local orig="${TEST_TMPDIR}/files/R"
+    local tp="${MAC_OPS_TRASH_DIR}${orig}"
+    mac_ops_index_read
+    _t5_add_record "ddd_20260101000000" "${orig}" "${tp}" "${FUTURE_ISO}"
+    mac_ops_index_write
+    mkdir -p "${orig}"
+    print "new" > "${orig}/f.txt"
+    mac_ops_trash_move "${orig}" "test" "test-module" >/dev/null 2>&1
+    _t5_key_for "${orig}"; local new_key="${REPLY}"
+    assert_eq "${new_key:+set}" "set" "moved item is indexed (orig)"
+    mac_ops_index_read
+    local new_tp="${_MAC_OPS_IDX_TRASH[${new_key}]}"
+    local distinct=yes
+    [[ "${new_tp}" == "${tp}" || "${new_tp}" == "${tp}/"* ]] && distinct=no
+    assert_eq "${distinct}" "yes" "move does not reuse a path another record claims"
+
+    # Destination above an indexed entry: P/c is indexed, P is trashed
+    _t5_reset_trash
+    local p="${TEST_TMPDIR}/files/P"
+    mkdir -p "${p}/c"
+    print "c" > "${p}/c/f.txt"
+    mac_ops_trash_move "${p}/c" "test" "test-module" >/dev/null 2>&1
+    mkdir -p "${p}"
+    print "p" > "${p}/g.txt"
+    mac_ops_trash_move "${p}" "test" "test-module" >/dev/null 2>&1
+    _t5_key_for "${p}"; new_key="${REPLY}"
+    assert_eq "${new_key:+set}" "set" "moved item is indexed (p)"
+    mac_ops_index_read
+    new_tp="${_MAC_OPS_IDX_TRASH[${new_key}]}"
+    local above=no
+    [[ "${MAC_OPS_TRASH_DIR}${p}/c" == "${new_tp}/"* ]] && above=yes
+    assert_eq "${above}" "no" "move is not placed above an indexed entry"
+}
+
+# A record whose trash path no longer exists is dropped with a log line
+test_trash_missing_path_record_dropped() {
+    print "[TEST] test_trash_missing_path_record_dropped"
+    _t5_reset_trash
+    local orig="${TEST_TMPDIR}/files/M"
+    mac_ops_index_read
+    _t5_add_record "eee_20260101000000" "${orig}" "${MAC_OPS_TRASH_DIR}${orig}" "${FUTURE_ISO}"
+    mac_ops_index_write
+
+    MAC_OPS_DRY_RUN=true mac_ops_trash_reconcile >/dev/null 2>&1
+    _t5_has_key "eee_20260101000000"
+    assert_eq "${REPLY}" "yes" "dry-run reconcile keeps the index unchanged"
+
+    local out
+    out=$(mac_ops_trash_reconcile 2>&1)
+    _t5_has_key "eee_20260101000000"
+    assert_eq "${REPLY}" "no" "record with a missing trash path is dropped"
+    assert_output_contains "${out}" "no longer exists" "dropped record is logged"
+}
+
+test_trash_nested_entry_survives_parent_expiry
+test_trash_nested_legacy_parent_postponed
+test_trash_shared_path_waits_for_last_record
+test_trash_move_avoids_indexed_path
+test_trash_missing_path_record_dropped
 
 # --- Teardown ---
 rm -rf "${TEST_TMPDIR}"

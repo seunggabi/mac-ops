@@ -780,26 +780,78 @@ _mac_ops_trash_copy_verified() {
 }
 
 # -----------------------------------------------------------------------------
-# Pick a trash path that does not exist yet. Result in REPLY.
-# The caller must hold the index lock so the name stays free until the rename
-# (renaming onto an existing directory would nest the entry inside it).
+# Pick a trash path for a new entry. Result in REPLY.
+# The caller must hold the index lock and have the index loaded, so the name
+# stays free until the rename (renaming onto an existing directory would nest
+# the entry inside it).
+#
+# Every index record must own a distinct, non-nested path: the result does
+# not exist, is not an indexed trash path, is not inside one and is not a
+# parent directory of one. A path wanted inside an indexed entry (X trashed,
+# X recreated, X/sub trashed) is placed under a timestamp-suffixed sibling of
+# that entry (X.<ts>/sub); a path that is taken is suffixed itself.
 # Usage: _mac_ops_trash_free_path <wanted_trash_path>
 # -----------------------------------------------------------------------------
 _mac_ops_trash_free_path() {
   local wanted="${1}"
-  local candidate="${wanted}"
 
-  if [[ -e "${candidate}" || -L "${candidate}" ]]; then
-    local ts_suffix
-    ts_suffix=$(date '+%Y%m%d_%H%M%S')
-    candidate="${wanted}.${ts_suffix}"
-    local n=0
-    while [[ -e "${candidate}" || -L "${candidate}" ]]; do
-      n=$((n + 1))
-      candidate="${wanted}.${ts_suffix}_${n}"
+  # Indexed trash paths and their parent directories
+  local -A idx_paths idx_ancestors
+  local key tp parent
+  for key in "${_MAC_OPS_IDX_KEYS[@]}"; do
+    tp="${_MAC_OPS_IDX_TRASH[${key}]}"
+    [[ -n "${tp}" ]] || continue
+    idx_paths[${tp}]=1
+    parent="${tp%/*}"
+    while [[ "${parent}" == "${MAC_OPS_TRASH_DIR}/"* && -z "${idx_ancestors[${parent}]+_}" ]]; do
+      idx_ancestors[${parent}]=1
+      parent="${parent%/*}"
     done
-  fi
+  done
 
+  # Shallowest indexed entry the wanted path would land inside
+  local base="${wanted}"
+  local rest=""
+  parent="${wanted%/*}"
+  while [[ "${parent}" == "${MAC_OPS_TRASH_DIR}/"* ]]; do
+    if [[ -n "${idx_paths[${parent}]+_}" ]]; then
+      base="${parent}"
+      rest="${wanted#"${parent}"}"
+    fi
+    parent="${parent%/*}"
+  done
+
+  local candidate="${base}${rest}"
+  local ts_suffix="" n=0 taken
+  while true; do
+    taken=false
+    if [[ -e "${candidate}" || -L "${candidate}" \
+      || -n "${idx_paths[${candidate}]+_}" || -n "${idx_ancestors[${candidate}]+_}" ]]; then
+      taken=true
+    else
+      parent="${candidate%/*}"
+      while [[ "${parent}" == "${MAC_OPS_TRASH_DIR}/"* ]]; do
+        if [[ -n "${idx_paths[${parent}]+_}" ]]; then
+          taken=true
+          break
+        fi
+        parent="${parent%/*}"
+      done
+    fi
+    [[ "${taken}" == true ]] || break
+
+    if [[ -z "${ts_suffix}" ]]; then
+      ts_suffix=$(date '+%Y%m%d_%H%M%S')
+      candidate="${base}.${ts_suffix}${rest}"
+    else
+      n=$((n + 1))
+      candidate="${base}.${ts_suffix}_${n}${rest}"
+    fi
+  done
+
+  if [[ "${candidate}" != "${wanted}" ]]; then
+    mac_ops_log_info "Trash path taken or inside another entry, using: ${candidate}"
+  fi
   REPLY="${candidate}"
   return 0
 }
@@ -1031,15 +1083,17 @@ mac_ops_trash_move() {
     return 1
   fi
 
+  # Timestamp suffix if the path is taken, inside or above another entry
+  _mac_ops_index_load_locked
+  _mac_ops_trash_free_path "${wanted_path}"
+  trash_path="${REPLY}"
+  trash_parent="${trash_path%/*}"
+
   if ! mkdir -p "${trash_parent}" 2>/dev/null; then
     _mac_ops_index_unlock
     mac_ops_log_error "Failed to create trash directory: ${trash_parent}"
     return 1
   fi
-
-  # Add timestamp suffix if an entry already exists at the same path
-  _mac_ops_trash_free_path "${wanted_path}"
-  trash_path="${REPLY}"
 
   if _mac_ops_trash_rename "${abs_source}" "${trash_path}"; then
     if ! _mac_ops_index_add_locked "${entry_key}" \
@@ -1070,8 +1124,15 @@ mac_ops_trash_move() {
     return 1
   fi
 
+  _mac_ops_index_load_locked
   _mac_ops_trash_free_path "${wanted_path}"
   trash_path="${REPLY}"
+  if ! mkdir -p "${trash_path%/*}" 2>/dev/null; then
+    _mac_ops_trash_remove_staged "${stage_dir}"
+    _mac_ops_index_unlock
+    mac_ops_log_error "Failed to create trash directory, source left untouched: ${trash_path%/*}"
+    return 1
+  fi
 
   if ! _mac_ops_trash_rename "${staged}" "${trash_path}"; then
     _mac_ops_trash_remove_staged "${stage_dir}"
@@ -1401,6 +1462,8 @@ _mac_ops_trash_recover_tmp_locked() {
 #    retention period from the moment it is discovered; its change time is
 #    recorded as "original_time" for information, and it is marked with
 #    "source": "reconcile".
+# Before step 3, records whose trash path no longer exists are dropped (and
+# logged): nothing is left to purge or restore.
 #
 # Nothing in the trash is deleted here, and every key added here is listed in
 # _MAC_OPS_RECONCILED_KEYS so the purge pass that ran this reconcile never
@@ -1435,9 +1498,29 @@ _mac_ops_trash_reconcile_locked() {
   _mac_ops_trash_recover_tmp_locked
   recovered="${REPLY}"
 
-  # --- 3. Unindexed entries ---
-  local -A indexed ancestors
+  # --- 3. Records whose trash path no longer exists ---
+  # (deleted with an outer entry, removed by hand, ...): nothing is left to
+  # purge or restore, so the record is dropped
   local key tp parent
+  local -a dangling_keys
+  dangling_keys=()
+  for key in "${_MAC_OPS_IDX_KEYS[@]}"; do
+    tp="${_MAC_OPS_IDX_TRASH[${key}]}"
+    [[ -n "${tp}" ]] && [[ -e "${tp}" || -L "${tp}" ]] && continue
+    dangling_keys+=("${key}")
+    if [[ "${dry}" == true ]]; then
+      mac_ops_log_info "[DRY_RUN] Will drop index record whose trash path no longer exists: ${tp:-<empty>} (original ${_MAC_OPS_IDX_ORIG[${key}]})"
+    else
+      mac_ops_log_info "Dropped index record whose trash path no longer exists: ${tp:-<empty>} (original ${_MAC_OPS_IDX_ORIG[${key}]})"
+    fi
+  done
+  local dropped=${#dangling_keys[@]}
+  if [[ ${dropped} -gt 0 ]]; then
+    _mac_ops_index_forget "${dangling_keys[@]}"
+  fi
+
+  # --- 4. Unindexed entries ---
+  local -A indexed ancestors
   for key in "${_MAC_OPS_IDX_KEYS[@]}"; do
     tp="${_MAC_OPS_IDX_TRASH[${key}]}"
     [[ "${tp}" == "${MAC_OPS_TRASH_DIR}/"* ]] || continue
@@ -1550,14 +1633,19 @@ _mac_ops_trash_reconcile_locked() {
     done
   done
 
-  # --- 4. Persist, then keep the processed temp files for recovery ---
+  # --- 5. Persist, then keep the processed temp files for recovery ---
   local changed=$((reindexed + recovered))
   local write_ok=true
-  if [[ ${changed} -gt 0 ]]; then
+  if [[ $((changed + dropped)) -gt 0 ]]; then
     if ! mac_ops_index_write; then
       write_ok=false
     fi
+  fi
+  if [[ ${changed} -gt 0 ]]; then
     mac_ops_log_warn "Reconcile: ${reindexed} unindexed and ${recovered} recovered trash entries indexed with a fresh retention period (not purged in this pass)"
+  fi
+  if [[ ${dropped} -gt 0 ]]; then
+    mac_ops_log_warn "Reconcile: ${dropped} index records dropped (trash path no longer exists)"
   fi
 
   local tmp_file
@@ -1645,47 +1733,86 @@ mac_ops_trash_expire() {
   local trash_path=""
   local size_bytes=0
 
+  # A trash path may be shared by several records (older versions reused the
+  # path of an entry whose directory had disappeared) and an entry may hold
+  # another indexed entry inside it (older versions nested a re-trashed child
+  # into its parent's entry). A path is deleted only when EVERY record that
+  # owns it has expired, and never while a live record sits underneath it.
+  local -A path_keys path_live path_expire blocked_by
+  local -a path_order
+  local parent=""
   for key in "${_MAC_OPS_IDX_KEYS[@]}"; do
-    # Found by this pass's reconcile: it gets its full retention period
-    [[ -n "${_MAC_OPS_RECONCILED_KEYS[${key}]+_}" ]] && continue
+    trash_path="${_MAC_OPS_IDX_TRASH[${key}]}"
+    # (records without a trash path are dropped by the reconcile above)
+    [[ -n "${trash_path}" ]] || continue
+    if [[ -z "${path_keys[${trash_path}]+_}" ]]; then
+      path_order+=("${trash_path}")
+      path_keys[${trash_path}]=""
+    fi
+    path_keys[${trash_path}]+="${key} "
 
+    expires_epoch=""
     expires_at="${_MAC_OPS_IDX_EXPIRE[${key}]}"
-    [[ -z "${expires_at}" ]] && continue
-
+    # Found by this pass's reconcile: it gets its full retention period.
     # Convert ISO8601 (UTC) -> epoch. Without -u the "Z" time would be read as
     # local time and items would expire early/late by the UTC offset.
-    expires_epoch=$(date -u -jf '%Y-%m-%dT%H:%M:%SZ' "${expires_at}" '+%s' 2>/dev/null) || expires_epoch=""
-    [[ -z "${expires_epoch}" ]] && continue
+    if [[ -z "${_MAC_OPS_RECONCILED_KEYS[${key}]+_}" && -n "${expires_at}" ]]; then
+      expires_epoch=$(date -u -jf '%Y-%m-%dT%H:%M:%SZ' "${expires_at}" '+%s' 2>/dev/null) || expires_epoch=""
+    fi
+    if [[ -z "${expires_epoch}" || ${now_epoch} -lt ${expires_epoch} ]]; then
+      path_live[${trash_path}]=1
+    elif [[ -z "${path_expire[${trash_path}]}" || "${expires_at}" > "${path_expire[${trash_path}]}" ]]; then
+      path_expire[${trash_path}]="${expires_at}"
+    fi
+  done
 
-    # Check if expired
-    if [[ ${now_epoch} -ge ${expires_epoch} ]]; then
-      trash_path="${_MAC_OPS_IDX_TRASH[${key}]}"
-      size_bytes="${_MAC_OPS_IDX_SIZE[${key}]:-0}"
+  # Parent directories of every live path are blocked
+  for trash_path in "${path_order[@]}"; do
+    [[ -n "${path_live[${trash_path}]+_}" && -n "${trash_path}" ]] || continue
+    parent="${trash_path%/*}"
+    while [[ "${parent}" == "${MAC_OPS_TRASH_DIR}/"* ]]; do
+      [[ -z "${blocked_by[${parent}]+_}" ]] && blocked_by[${parent}]="${trash_path}"
+      parent="${parent%/*}"
+    done
+  done
 
-      if [[ "${dry}" == true ]]; then
-        mac_ops_log_info "[DRY_RUN] Will permanently delete: ${trash_path} (${size_bytes} bytes, expired ${expires_at})"
-        purged_bytes=$((purged_bytes + size_bytes))
-        deleted_count=$((deleted_count + 1))
+  local -a path_key_list
+  local verb_prefix=""
+  [[ "${dry}" == true ]] && verb_prefix="[DRY_RUN] "
+  for trash_path in "${path_order[@]}"; do
+    [[ -n "${path_live[${trash_path}]+_}" ]] && continue
+    path_key_list=(${=path_keys[${trash_path}]})
+    expires_at="${path_expire[${trash_path}]}"
+    size_bytes="${_MAC_OPS_IDX_SIZE[${path_key_list[1]}]:-0}"
+
+    if [[ -n "${blocked_by[${trash_path}]+_}" ]]; then
+      mac_ops_log_info "${verb_prefix}Expired trash entry postponed, it holds a live entry: ${trash_path} (live: ${blocked_by[${trash_path}]})"
+      continue
+    fi
+
+    if [[ "${dry}" == true ]]; then
+      mac_ops_log_info "[DRY_RUN] Will permanently delete: ${trash_path} (${size_bytes} bytes, expired ${expires_at}, ${#path_key_list[@]} records)"
+      purged_bytes=$((purged_bytes + size_bytes))
+      deleted_count=$((deleted_count + 1))
+      continue
+    fi
+
+    # Permanently delete trash file (guard: must be inside MAC_OPS_TRASH_DIR)
+    if [[ -n "${trash_path}" && "${trash_path}" == "${MAC_OPS_TRASH_DIR}/"* ]] \
+      && [[ -e "${trash_path}" || -L "${trash_path}" ]]; then
+      rm -rf -- "${trash_path}" 2>/dev/null || true
+      if [[ -e "${trash_path}" || -L "${trash_path}" ]]; then
+        # Keep the index records: dropping them would leave the item on disk
+        # with nothing left to purge or list it
+        failed_count=$((failed_count + 1))
+        mac_ops_log_warn "Could not delete expired trash item (kept in index, will retry): ${trash_path}"
         continue
       fi
-
-      # Permanently delete trash file (guard: must be inside MAC_OPS_TRASH_DIR)
-      if [[ -n "${trash_path}" && "${trash_path}" == "${MAC_OPS_TRASH_DIR}/"* ]] \
-        && [[ -e "${trash_path}" || -L "${trash_path}" ]]; then
-        rm -rf -- "${trash_path}" 2>/dev/null || true
-        if [[ -e "${trash_path}" || -L "${trash_path}" ]]; then
-          # Keep the index record: dropping it would leave the item on disk
-          # with nothing left to purge or list it
-          failed_count=$((failed_count + 1))
-          mac_ops_log_warn "Could not delete expired trash item (kept in index, will retry): ${trash_path}"
-          continue
-        fi
-        purged_bytes=$((purged_bytes + size_bytes))
-      fi
-
-      remove_keys+=("${key}")
-      deleted_count=$((deleted_count + 1))
+      purged_bytes=$((purged_bytes + size_bytes))
     fi
+
+    remove_keys+=("${path_key_list[@]}")
+    deleted_count=$((deleted_count + 1))
   done
 
   # Remove expired entries from index
