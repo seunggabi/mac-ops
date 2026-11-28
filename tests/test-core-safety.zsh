@@ -1023,6 +1023,109 @@ test_run_manifest
 test_run_manifest_dry_run
 test_run_manifest_retention
 
+# =============================================================================
+# Status health (item 9): fixture manifests, injected launchctl check
+# =============================================================================
+print "[TEST] status_health"
+
+TC_AGENTS="${TEST_TMPDIR}/agents"
+TC_LOADED=""   # labels the stubbed launchctl check reports as loaded
+_mac_ops_agent_loaded() { [[ " ${TC_LOADED} " == *" ${1} "* ]]; }
+
+# Write a fixture manifest that ended <age> seconds ago
+# Usage: _tc_manifest <age_seconds> <scheduled true|false> <exit_status> [errors warnings data]
+_tc_manifest() {
+    local now ended started id
+    now=$(date +%s)
+    ended=$(date -u -r $(( now - $1 )) '+%Y-%m-%dT%H:%M:%SZ')
+    started=$(date -u -r $(( now - $1 - 30 )) '+%Y-%m-%dT%H:%M:%SZ')
+    id="$(date -r $(( now - $1 - 30 )) '+%Y%m%dT%H%M%S')-$(( 1000 + $1 % 1000 ))"
+    mkdir -p "${MAC_OPS_HOME}/runs"
+    cat > "${MAC_OPS_HOME}/runs/${id}.json" <<JSON
+{
+  "version": 1,
+  "run_id": "${id}",
+  "scheduled": $2,
+  "started": "${started}",
+  "ended": "${ended}",
+  "exit_status": $3,
+  "errors": ${4:-0},
+  "warnings": ${5:-0},
+  "items_moved": 2,
+  "data_items_moved": ${6:-0},
+  "bytes_moved": 10,
+  "modules": {},
+  "moves": []
+}
+JSON
+}
+
+_tc_reset() {
+    rm -rf -- "${MAC_OPS_HOME}/runs" "${TC_AGENTS}"
+    mkdir -p "${TC_AGENTS}"
+    cp "${MAC_OPS_ROOT}/launchd/com.mac-ops.cleanup.plist" "${TC_AGENTS}/com.mac-ops.cleanup.plist"
+    TC_LOADED="com.mac-ops.cleanup"
+}
+
+test_health_failed_scheduled_run() {
+    _tc_reset
+    _tc_manifest 600 true 1 3 1 0
+    local out
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_output_contains "${out%%$'\n'*}" "[ALERT]" "failed scheduled run: alert on the first line"
+    assert_output_contains "${out%%$'\n'*}" "FAILED (exit status 1, 3 errors)" "failed scheduled run: status and errors named"
+    assert_output_contains "${out}" "Exit status:      1 (FAILED)" "failed scheduled run: exit status shown"
+}
+
+test_health_stale_agent() {
+    _tc_reset
+    _tc_manifest $(( 4 * 3600 )) true 0
+    local out
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_output_contains "${out%%$'\n'*}" "[ALERT] scheduled cleanup has not run for 4h (interval 60m" "stale agent (4h > 3 x 1h): alert on the first line"
+
+    # A recent manual run does not hide an overdue schedule
+    _tc_manifest 60 false 0
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_output_contains "${out%%$'\n'*}" "has not run for 4h" "stale agent: still alerted after a manual run"
+    assert_output_contains "${out}" "Last scheduled:" "stale agent: last scheduled run listed separately"
+
+    # Calendar interval: daily (Hour) -> 4h is fine
+    plutil -remove StartInterval "${TC_AGENTS}/com.mac-ops.cleanup.plist" >/dev/null 2>&1
+    plutil -insert StartCalendarInterval -json '{"Hour": 3, "Minute": 0}' "${TC_AGENTS}/com.mac-ops.cleanup.plist" >/dev/null 2>&1
+    _mac_ops_agent_interval "${TC_AGENTS}/com.mac-ops.cleanup.plist"
+    assert_eq "${REPLY}" "86400" "StartCalendarInterval with Hour: one day"
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_output_not_contains "${out}" "[ALERT]" "daily agent 4h after its run: no alert"
+}
+
+test_health_ok() {
+    _tc_reset
+    _tc_manifest 600 true 0 0 2 1
+    local before after out
+    before=$(ls -laR "${MAC_OPS_HOME}" 2>/dev/null | cksum)
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    after=$(ls -laR "${MAC_OPS_HOME}" 2>/dev/null | cksum)
+    assert_eq "${out%%$'\n'*}" "=== Health ===" "healthy: no alert, health header first"
+    assert_output_contains "${out}" "Exit status:      0 (ok)" "healthy: exit status"
+    assert_output_contains "${out}" "0 errors, 2 warnings" "healthy: errors and warnings of the last run"
+    assert_output_contains "${out}" "Data items moved: 1" "healthy: data items moved"
+    assert_output_contains "${out}" "Agent com.mac-ops.cleanup: loaded" "healthy: agent loaded"
+    assert_output_contains "${out}" "Agent com.mac-ops.monitor: not installed" "monitor agent state shown"
+    assert_eq "${after}" "${before}" "health check writes nothing"
+
+    # Installed but not loaded
+    TC_LOADED=""
+    out=$(mac_ops_run_health "${TC_AGENTS}")
+    assert_output_contains "${out%%$'\n'*}" "com.mac-ops.cleanup is installed but not loaded" "unloaded agent: alert on the first line"
+}
+
+test_health_failed_scheduled_run
+test_health_stale_agent
+test_health_ok
+unset -f _mac_ops_agent_loaded
+rm -rf -- "${MAC_OPS_HOME}/runs" "${TC_AGENTS}"
+
 # --- Teardown ---
 rm -rf "${TEST_TMPDIR}"
 

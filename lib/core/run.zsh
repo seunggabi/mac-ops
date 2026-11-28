@@ -382,3 +382,158 @@ mac_ops_trash_restore_run() {
   mac_ops_log_info "Restore of run ${run_id}: ${restored} ${verb}, ${refused} refused, ${failed} failed, ${gone} no longer in the trash"
   (( refused == 0 && failed == 0 ))
 }
+
+# =============================================================================
+# Health (mac-ops status)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Is a launchd agent loaded? Read-only (launchctl list <label>). Tests
+# replace this function.
+# Usage: _mac_ops_agent_loaded <label>
+# -----------------------------------------------------------------------------
+_mac_ops_agent_loaded() {
+  launchctl list "${1}" >/dev/null 2>&1
+}
+
+# -----------------------------------------------------------------------------
+# Scheduling interval of an installed agent plist in seconds (REPLY, empty
+# when unknown). StartInterval is used as is; for StartCalendarInterval (its
+# first entry if it is a list) the interval is the period of the coarsest
+# field set: Month 1 year, Day 31 days, Weekday 7 days, Hour 1 day,
+# Minute only 1 hour.
+# Usage: _mac_ops_agent_interval <plist>
+# -----------------------------------------------------------------------------
+_mac_ops_agent_interval() {
+  local plist="${1}" v base
+  REPLY=""
+  v=$(plutil -extract StartInterval raw -o - "${plist}" 2>/dev/null) || v=""
+  if [[ "${v}" =~ ^[0-9]+$ && "${v}" -gt 0 ]]; then
+    REPLY="${v}"
+    return 0
+  fi
+  base="StartCalendarInterval"
+  if plutil -extract "${base}.0" xml1 -o - "${plist}" >/dev/null 2>&1; then
+    base="${base}.0"
+  fi
+  plutil -extract "${base}" xml1 -o - "${plist}" >/dev/null 2>&1 || return 0
+  local key secs
+  for key secs in Month 31536000 Day 2678400 Weekday 604800 Hour 86400 Minute 3600; do
+    if plutil -extract "${base}.${key}" raw -o - "${plist}" >/dev/null 2>&1; then
+      REPLY="${secs}"
+      return 0
+    fi
+  done
+  # A dict with no fields fires every minute
+  REPLY=60
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# "3h", "45m": a duration in seconds for humans. Result in REPLY.
+# -----------------------------------------------------------------------------
+_mac_ops_run_duration() {
+  local s="${1:-0}"
+  if (( s >= 172800 )); then REPLY="$(( s / 86400 ))d"
+  elif (( s >= 7200 )); then REPLY="$(( s / 3600 ))h"
+  else REPLY="$(( s / 60 ))m"
+  fi
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Print the health section of "mac-ops status". Read-only. When the last
+# scheduled run failed, the cleanup agent is installed but not loaded, or it
+# has not run for more than three intervals, the FIRST line printed is an
+# "[ALERT] ..." line saying so.
+# Usage: mac_ops_run_health [launch_agents_dir]
+# -----------------------------------------------------------------------------
+mac_ops_run_health() {
+  local agent_dir="${1:-${HOME}/Library/LaunchAgents}"
+  local -a alerts files
+  alerts=()
+  _mac_ops_run_manifests
+  files=("${reply[@]}")
+
+  # Newest run, then the newest scheduled run
+  local -A last sched
+  local i
+  for (( i = ${#files}; i >= 1; i-- )); do
+    mac_ops_run_manifest_read "${files[i]}" || continue
+    (( ${#last} )) || last=("${(@kv)MAC_OPS_MANIFEST}")
+    if [[ "${MAC_OPS_MANIFEST[scheduled]}" == "true" ]]; then
+      sched=("${(@kv)MAC_OPS_MANIFEST}")
+      break
+    fi
+  done
+
+  if (( ${#sched} )) && [[ "${sched[exit_status]:-1}" != "0" ]]; then
+    alerts+=("last scheduled run ${sched[run_id]} FAILED (exit status ${sched[exit_status]:-?}, ${sched[errors]:-0} errors) - see: mac-ops runs, ${MAC_OPS_LOG_DIR}/mac-ops.log")
+  fi
+
+  # Scheduled agents: loaded? cleanup agent overdue?
+  local label plist interval last_epoch now age age_h state
+  local -a agent_lines
+  agent_lines=()
+  now=$(date +%s)
+  for label in com.mac-ops.cleanup com.mac-ops.monitor; do
+    plist="${agent_dir}/${label}.plist"
+    if _mac_ops_agent_loaded "${label}"; then
+      state="loaded"
+    elif [[ -f "${plist}" ]]; then
+      state="NOT LOADED (plist installed)"
+      alerts+=("${label} is installed but not loaded by launchd - fix: launchctl load ${plist}")
+    else
+      state="not installed"
+    fi
+    agent_lines+=("${label}: ${state}")
+
+    [[ "${label}" == "com.mac-ops.cleanup" && -f "${plist}" ]] || continue
+    _mac_ops_agent_interval "${plist}"; interval="${REPLY}"
+    [[ -n "${interval}" ]] || continue
+    last_epoch=""
+    if (( ${#sched} )); then
+      _mac_ops_iso_to_epoch "${sched[ended]:-${sched[started]}}"; last_epoch="${REPLY}"
+    fi
+    if [[ -z "${last_epoch}" ]]; then
+      # Never ran on schedule: measure from the installation of the plist
+      last_epoch=$(stat -f %m "${plist}" 2>/dev/null) || last_epoch=""
+    fi
+    [[ "${last_epoch}" =~ ^[0-9]+$ ]] || continue
+    age=$(( now - last_epoch ))
+    if (( age > 3 * interval )); then
+      _mac_ops_run_duration "${age}"; age_h="${REPLY}"
+      _mac_ops_run_duration "${interval}"
+      if (( ${#sched} )); then
+        alerts+=("scheduled cleanup has not run for ${age_h} (interval ${REPLY}, more than three intervals)")
+      else
+        alerts+=("scheduled cleanup has never run since it was installed ${age_h} ago (interval ${REPLY})")
+      fi
+    fi
+  done
+
+  if (( ${#alerts} )); then
+    print -r -- "[ALERT] ${(j: | :)alerts}"
+  fi
+
+  print "=== Health ==="
+  if (( ${#last} )); then
+    local kind="manual"
+    [[ "${last[scheduled]}" == "true" ]] && kind="scheduled"
+    local st="ok"
+    [[ "${last[exit_status]:-1}" != "0" ]] && st="FAILED"
+    print -r -- "Last run:         ${last[started]} UTC (${last[run_id]}, ${kind})"
+    print -r -- "Exit status:      ${last[exit_status]:-?} (${st})"
+    print -r -- "Errors/warnings:  ${last[errors]:-0} errors, ${last[warnings]:-0} warnings"
+    print -r -- "Data items moved: ${last[data_items_moved]:-0} (settings/app data)"
+    if (( ${#sched} )) && [[ "${sched[run_id]}" != "${last[run_id]}" ]]; then
+      print -r -- "Last scheduled:   ${sched[started]} UTC (${sched[run_id]}, exit status ${sched[exit_status]:-?})"
+    fi
+  else
+    print "Last run:         none recorded (${MAC_OPS_HOME}/runs)"
+  fi
+  for i in "${agent_lines[@]}"; do
+    print -r -- "Agent ${i}"
+  done
+  return 0
+}

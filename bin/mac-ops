@@ -74,7 +74,8 @@ Commands:
   monitor collect  Record a snapshot (use for scheduled collection)
   monitor setup    Install launchd agent (collect every 5 min)
   monitor unsetup  Uninstall launchd agent
-  status           Show trash status and disk usage
+  status           Show health (last run, its exit status, errors, warnings,
+                   data items moved, agents loaded/overdue), trash and disk
   restore <path>   Restore from trash to original location
   restore --run <run-id>
                    Restore every item of one run that is still in the trash
@@ -193,6 +194,11 @@ _mac_ops_cmd_status() {
   # Read-only: no directory creation, no index write, no migration
   mac_ops_load_config || return 1
 
+  # Health first: a failed or overdue scheduled run is the first line
+  mac_ops_run_health
+
+  print ""
+
   # Trash status
   mac_ops_trash_status
 
@@ -212,13 +218,8 @@ _mac_ops_cmd_status() {
 
   print ""
 
-  # launchd agent status
+  # launchd agent plists (loaded state is in the health section)
   print "=== launchd Agent ==="
-  if launchctl list 2>/dev/null | grep -q "com.mac-ops" 2>/dev/null; then
-    print "Status: Installed (Active)"
-  else
-    print "Status: Not installed"
-  fi
   _mac_ops_report_agents
 }
 
