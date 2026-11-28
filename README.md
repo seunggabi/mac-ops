@@ -73,7 +73,7 @@ Enabled by default: `cache`, `tmp`, `log`, `orphan-app`. The others are off unti
 | Module | Description |
 |--------|-------------|
 | `cache` | Clean `~/Library/Caches` (Apple system caches excluded) |
-| `tmp` | Clean `/tmp`, `/private/var/folders`, CrashReporter |
+| `tmp` | Clean `/private/var/folders` (files you own, up to 6 levels deep, in every area of your folder: `T`, `C`, `X` and `0`) and CrashReporter. `/tmp` itself is not scanned: the scan root `/tmp` is a symbolic link to `/private/tmp`, which `find` does not follow |
 | `log` | Clean `~/Library/Logs`, system diagnostic reports |
 | `zombie` | Report zombie processes (opt-in: send SIGCHLD to eligible parents; never SIGTERM/SIGKILL) |
 | `orphan` | Report orphan process candidates (sends SIGTERM only with `MAC_OPS_ORPHAN_ACTION=term`, never SIGKILL) |
@@ -265,6 +265,10 @@ Modules: a plain `mac-ops run` runs only enabled modules and logs one line for e
 | `Modules.orphan-killer.Action` | `MAC_OPS_ORPHAN_ACTION` | `report` | report / term |
 | `Monitor.RetentionDays` | `MAC_OPS_MONITOR_RETENTION_DAYS` | `7` | integer >= 1 |
 | `Monitor.KillThresholdMB` | `MAC_OPS_MONITOR_KILL_THRESHOLD_MB` | `500` | integer >= 1 |
+| `Notify.OnSuccess` | `MAC_OPS_NOTIFY_ON_SUCCESS` | `false` | true / false |
+| `Notify.FailureRepeatHours` | `MAC_OPS_NOTIFY_REPEAT_HOURS` | `24` | integer 1 to 8760 |
+
+Notifications: a failed run (an ERROR logged or a non-zero exit) shows a macOS notification, scheduled or manual. The same failure (same exit status and the same ERROR messages) is notified at most once per `Notify.FailureRepeatHours` (default 24); a different failure is notified at once. A successful scheduled run is notified only when `Notify.OnSuccess` is true. An item larger than `MaxSingleFileBytes` is skipped with a WARN naming the limit; it does not make the run fail.
 
 ### Environment Variables
 
@@ -457,7 +461,7 @@ mac-ops run --dry-run
 |------|--------|
 | `/System/*`, `/bin/*`, `/sbin/*`, `/usr/*` | SIP protected |
 | `~/Library/Keychains/*` | Keychains (passwords, certificates) |
-| `~/Library/Preferences/*` | User preferences |
+| `~/Library/Preferences/*` | User preferences. Exception: orphan-app may move the plist of an app that is no longer installed, only with `Modules.orphan-app-cleanup.DataAction` = `trash` (default `report`: listed, never moved) |
 | `~/Documents/*`, `~/Desktop/*`, `~/Downloads/*` | User documents |
 | `/Library/LaunchDaemons/*`, `/Library/LaunchAgents/*` | System services |
 
@@ -466,7 +470,8 @@ mac-ops run --dry-run
 ```
 kernel_task, launchd, WindowServer, loginwindow,
 SystemUIServer, Finder, Dock, cfprefsd, mds, mds_stores,
-coreaudiod, opendirectoryd
+coreaudiod, opendirectoryd, diskarbitrationd, configd,
+UserEventAgent, trustd, securityd, syslogd, notifyd, logd, powerd
 ```
 
 ### Docker Module

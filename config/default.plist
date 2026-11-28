@@ -116,5 +116,12 @@
 		<key>KillThresholdMB</key>
 		<integer>500</integer>
 	</dict>
+	<key>Notify</key>
+	<dict>
+		<key>OnSuccess</key>
+		<false/>
+		<key>FailureRepeatHours</key>
+		<integer>24</integer>
+	</dict>
 </dict>
 </plist>

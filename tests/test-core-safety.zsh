@@ -369,7 +369,7 @@ missing=""
 for n in ${(f)names}; do
     [[ "${out}" == *"${n} "*"= "* ]] || missing+=" ${n}"
 done
-assert_eq "$(print -r -- "${names}" | grep -c .)" "39" "registry holds 39 settings"
+assert_eq "$(print -r -- "${names}" | grep -c .)" "41" "registry holds 41 settings"
 assert_eq "${missing}" "" "mac-ops config lists every registry setting"
 assert_output_contains "${out}" "$(printf '%-42s = %-12s (%s' MAC_OPS_TMP_MAX_AGE_DAYS 4 env)" "config shows env source"
 assert_output_contains "${out}" "$(printf '%-42s = %-12s (%s' MAC_OPS_ORPHAN_ACTION report default)" "config shows default source"
@@ -786,6 +786,297 @@ test_trash_bad_expire_restamped() {
 test_trash_untrusted_index_paths
 test_trash_bad_expire_restamped
 
+# An oversized item is a refusal: WARN naming the configured limit, no ERROR
+test_size_guard_warns() {
+    print "[TEST] test_size_guard_warns"
+    local f="${TEST_TMPDIR}/files/big.bin" start out rc errors
+    mkdir -p "${f:h}"
+    head -c 20000 /dev/zero > "${f}"
+    mac_ops_log_line_count; start="${REPLY}"
+    rc=0
+    out=$(MAC_OPS_MAX_SINGLE_FILE_BYTES=1024 MAC_OPS_FORCE=false mac_ops_check_size_guard "${f}" 2>&1) || rc=$?
+    assert_eq "${rc}" "1" "size guard refuses an item over the limit"
+    assert_output_contains "${out}" "[WARN] Size guard: skipped ${f}" "oversized item logged at WARN"
+    assert_output_contains "${out}" "limit of $(mac_ops_format_bytes 1024)" "message states the configured limit"
+    assert_output_not_contains "${out}" "2GB" "message does not state a fixed 2GB"
+    mac_ops_log_count_since "${start}" ERROR; errors="${REPLY}"
+    assert_eq "${errors}" "0" "oversized item counts no run error"
+    rc=0
+    out=$(mac_ops_check_size_guard "${TEST_TMPDIR}/files/vanished.bin" 2>&1) || rc=$?
+    assert_eq "${rc}/$(print -r -- "${out}" | grep -c 'ERROR')" "1/0" "vanished path: skipped without an ERROR"
+    rm -f -- "${f}"
+}
+test_size_guard_warns
+
+# Bookkeeping names in another case (case-insensitive APFS) are never
+# purged; restore protection ignores case
+test_trash_bookkeeping_case() {
+    print "[TEST] test_trash_bookkeeping_case"
+    _t5_reset_trash
+    mkdir -p "${MAC_OPS_TRASH_DIR}/.staging/keep" "${MAC_OPS_TRASH_DIR}/.index-recovery/x"
+    print s > "${MAC_OPS_TRASH_DIR}/.staging/keep/f"
+    print r > "${MAC_OPS_TRASH_DIR}/.index-recovery/x/f"
+    : >> "${MAC_OPS_TRASH_DIR}/.index.flock"
+    local n out
+    for n in .INDEX.JSON .Index.Flock .Staging .index-Recovery/x; do
+        _mac_ops_trash_path_valid "${MAC_OPS_TRASH_DIR}/${n}"
+        assert_eq "$?" "1" "trash path ${n} is a bookkeeping name, not valid"
+    done
+    mac_ops_index_read
+    _t5_add_record "c1_20260101000000" "/x/c1" "${MAC_OPS_TRASH_DIR}/.INDEX.JSON" "${PAST_ISO}"
+    _t5_add_record "c2_20260101000000" "/x/c2" "${MAC_OPS_TRASH_DIR}/.Index.Flock" "${PAST_ISO}"
+    _t5_add_record "c3_20260101000000" "/x/c3" "${MAC_OPS_TRASH_DIR}/.Staging" "${PAST_ISO}"
+    _t5_add_record "c4_20260101000000" "/x/c4" "${MAC_OPS_TRASH_DIR}/.index-Recovery/x" "${PAST_ISO}"
+    mac_ops_index_write
+    mac_ops_trash_expire >/dev/null 2>&1
+    assert_eq "$(plutil -convert xml1 -o /dev/null "${MAC_OPS_INDEX_FILE}" >/dev/null 2>&1 && grep -c '"c1_20260101000000": {' "${MAC_OPS_INDEX_FILE}")" "1" "real index survives a record naming .INDEX.JSON"
+    assert_eq "$(cat "${MAC_OPS_TRASH_DIR}/.staging/keep/f" 2>/dev/null)" "s" "real staging survives a record naming .Staging"
+    assert_eq "$(cat "${MAC_OPS_TRASH_DIR}/.index-recovery/x/f" 2>/dev/null)" "r" "real recovery dir survives a record naming .index-Recovery/x"
+    assert_eq "$([[ -f "${MAC_OPS_TRASH_DIR}/.index.flock" ]] && print kept)" "kept" "real lock file survives a record naming .Index.Flock"
+
+    _mac_ops_trash_restore_target_ok "${HOME}/DOCUMENTS/x"
+    assert_eq "$?" "1" "restore into ~/DOCUMENTS (case variant) is refused"
+    _mac_ops_trash_restore_target_ok "${HOME}/Library/PREFERENCES"
+    assert_eq "$?" "1" "restore onto ~/Library/PREFERENCES itself is refused"
+    _mac_ops_trash_restore_target_ok "${HOME}/Library/Preferences/com.example.x.plist"
+    assert_eq "$?" "0" "restore of a plist inside Preferences is still allowed"
+    _mac_ops_trash_restore_target_ok "${MAC_OPS_HOME:h}/${(U)MAC_OPS_HOME:t}/x"
+    assert_eq "$?" "1" "restore into the mac-ops home in another case is refused"
+    _t5_reset_trash
+}
+test_trash_bookkeeping_case
+
+# A trashed empty directory is not swept as an empty leftover: it stays in
+# the trash and restorable; unindexed empty leftovers are still removed
+test_trash_indexed_empty_dir_kept() {
+    print "[TEST] test_trash_indexed_empty_dir_kept"
+    _t5_reset_trash
+    local base="${TEST_TMPDIR}/files/emptydirs" rc
+    rm -rf -- "${base}"
+    mkdir -p "${base}/EmptyA" "${base}/EmptyB"
+    mac_ops_trash_move "${base}/EmptyA" "test" "test-module" >/dev/null 2>&1
+    mac_ops_trash_move "${base}/EmptyB" "test" "test-module" >/dev/null 2>&1
+    mkdir -p "${MAC_OPS_TRASH_DIR}/leftover/deeper"
+    assert_eq "$([[ -d "${MAC_OPS_TRASH_DIR}${base}/EmptyA" ]] && print yes)" "yes" "empty directory moved to the trash"
+    mac_ops_trash_expire >/dev/null 2>&1
+    assert_eq "$([[ -d "${MAC_OPS_TRASH_DIR}${base}/EmptyA" ]] && print kept || print swept)" "kept" "purge pass keeps an indexed empty directory"
+    assert_eq "$([[ -e "${MAC_OPS_TRASH_DIR}/leftover" ]] && print kept || print swept)" "swept" "unindexed empty leftovers are still removed"
+    rc=0; mac_ops_trash_restore "${base}/EmptyA" >/dev/null 2>&1 || rc=$?
+    assert_eq "${rc}/$([[ -d "${base}/EmptyA" ]] && print back)" "0/back" "trashed empty directory is restorable after a purge pass"
+    assert_eq "$([[ -d "${MAC_OPS_TRASH_DIR}${base}/EmptyB" ]] && print kept || print swept)" "kept" "restore sweep keeps another indexed empty directory"
+    rm -rf -- "${base}"
+    _t5_reset_trash
+}
+test_trash_indexed_empty_dir_kept
+
+# A source that vanished between selection and move is a skip (no ERROR);
+# a move that genuinely fails is still an ERROR
+test_trash_move_vanished_source() {
+    print "[TEST] test_trash_move_vanished_source"
+    _t5_reset_trash
+    local base="${TEST_TMPDIR}/files/vanish" start rc out
+    rm -rf -- "${base}"; mkdir -p "${base}"
+    mkdir -p "${MAC_OPS_LOG_DIR}"
+
+    mac_ops_log_line_count; start="${REPLY}"
+    rc=0; out=$(mac_ops_trash_move "${base}/gone" "test" "cache-cleanup" 2>&1) || rc=$?
+    assert_eq "${rc}" "1" "vanished source: not moved"
+    assert_output_contains "${out}" "Skipped, no longer exists" "vanished source: logged as a skip"
+    mac_ops_log_count_since "${start}" ERROR
+    assert_eq "${REPLY}" "0" "vanished source: no run error"
+
+    # Vanishes after the checks, while waiting to be renamed
+    mkdir -p "${base}/race1"; print x > "${base}/race1/f"
+    mac_ops_log_line_count; start="${REPLY}"
+    rc=0; out=$(
+        _mac_ops_trash_rename() { command rm -rf -- "${1}"; return 1; }
+        mac_ops_trash_move "${base}/race1" "test" "orphan-app-cleanup" 2>&1) || rc=$?
+    assert_eq "${rc}" "1" "source vanished before the rename: not moved"
+    mac_ops_log_count_since "${start}" ERROR
+    assert_eq "${REPLY}" "0" "source vanished before the rename: no run error"
+
+    # Two modules moving the same directory at once: one moves it, no ERROR
+    mkdir -p "${base}/Caches/com.example.shared"; print x > "${base}/Caches/com.example.shared/f"
+    mac_ops_log_line_count; start="${REPLY}"
+    ( mac_ops_trash_move "${base}/Caches/com.example.shared" "cache-expired" "cache-cleanup" >/dev/null 2>&1 ) &
+    ( mac_ops_trash_move "${base}/Caches/com.example.shared" "orphan-app-cache" "orphan-app-cleanup" >/dev/null 2>&1 ) &
+    wait
+    mac_ops_log_count_since "${start}" ERROR
+    assert_eq "${REPLY}" "0" "parallel moves of the same directory: no run error"
+    mac_ops_index_read
+    local k n=0
+    for k in "${_MAC_OPS_IDX_KEYS[@]}"; do
+        [[ "${_MAC_OPS_IDX_ORIG[${k}]}" == "${base}/Caches/com.example.shared" ]] && n=$((n + 1))
+    done
+    assert_eq "${n}/$([[ -e "${base}/Caches/com.example.shared" ]] && print left || print moved)" "1/moved" "parallel moves of the same directory: moved once"
+
+    # Parent not searchable (chmod 000, like a TCC denial): the item is not
+    # "vanished", it cannot be reached - still an ERROR
+    mkdir -p "${base}/locked/item"; print x > "${base}/locked/item/f"
+    chmod 000 "${base}/locked"
+    _mac_ops_trash_source_vanished "${base}/locked/item"
+    assert_eq "$?" "1" "unsearchable parent: not treated as vanished"
+    _mac_ops_trash_source_vanished "${base}/gone"
+    assert_eq "$?" "0" "missing item in a searchable parent: vanished"
+    mac_ops_log_line_count; start="${REPLY}"
+    rc=0; out=$(mac_ops_trash_move "${base}/locked/item" "test" "cache-cleanup" 2>&1) || rc=$?
+    chmod 755 "${base}/locked"
+    assert_eq "${rc}" "1" "unsearchable parent: not moved"
+    assert_output_not_contains "${out}" "Skipped, no longer exists" "unsearchable parent: not logged as a skip"
+    mac_ops_log_count_since "${start}" ERROR
+    assert_eq "${REPLY}" "1" "unsearchable parent: still an ERROR"
+    assert_eq "$(cat "${base}/locked/item/f" 2>/dev/null)" "x" "unsearchable parent: item left in place"
+
+    # A genuine failure (source still there) is not masked
+    mkdir -p "${base}/stuck"; print x > "${base}/stuck/f"
+    mac_ops_log_line_count; start="${REPLY}"
+    rc=0; out=$(
+        _mac_ops_trash_rename() { return 1; }
+        _mac_ops_trash_copy_verified() { return 1; }
+        mac_ops_trash_move "${base}/stuck" "test" "cache-cleanup" 2>&1) || rc=$?
+    assert_eq "${rc}" "1" "failed move: returns 1"
+    mac_ops_log_count_since "${start}" ERROR
+    assert_eq "${REPLY}" "1" "failed move of an existing source: still an ERROR"
+    assert_eq "$(cat "${base}/stuck/f" 2>/dev/null)" "x" "failed move leaves the source in place"
+    rm -rf -- "${base}"
+    _t5_reset_trash
+}
+test_trash_move_vanished_source
+
+# System daemons are protected processes (the list once kept in an unread
+# config/protected-processes.plist)
+test_protected_system_processes() {
+    print "[TEST] test_protected_system_processes"
+    local p
+    for p in kernel_task launchd WindowServer diskarbitrationd configd UserEventAgent trustd securityd syslogd notifyd logd powerd; do
+        mac_ops_is_process_protected "${p}" >/dev/null 2>&1
+        assert_eq "$?" "1" "protected process: ${p}"
+    done
+    mac_ops_is_process_protected "SomeUserApp" >/dev/null 2>&1
+    assert_eq "$?" "0" "an ordinary process is not protected"
+    assert_eq "$([[ -e "${MAC_OPS_ROOT}/config/protected-processes.plist" ]] && print present || print gone)" "gone" "unread protected-processes.plist is removed"
+}
+test_protected_system_processes
+
+# cache-cleanup (dry-run, fixture HOME): ms-playwright-mcp is never moved,
+# and the installed-app check matches bundle IDs as fixed strings
+test_cache_cleanup_names() {
+    print "[TEST] test_cache_cleanup_names"
+    local fx="${TEST_TMPDIR}/cachefx" out d
+    mkdir -p "${fx}/home/Library/Caches" "${fx}/home/Applications/Fx.app/Contents"
+    plutil -create xml1 "${fx}/home/Applications/Fx.app/Contents/Info.plist"
+    plutil -insert CFBundleIdentifier -string "org.macopstestXfixture" "${fx}/home/Applications/Fx.app/Contents/Info.plist"
+    for d in ms-playwright-mcp ms-playwright org.macopstest.fixture org.macopstestXfixture; do
+        mkdir -p "${fx}/home/Library/Caches/${d}"
+        print x > "${fx}/home/Library/Caches/${d}/f"
+    done
+    out=$(HOME="${fx}/home" zsh -f -c '
+        MAC_OPS_ROOT="$1"; fx="$2"
+        export MAC_OPS_HOME="${fx}/ops" MAC_OPS_LOG_DIR="${fx}/ops/.logs" MAC_OPS_TRASH_DIR="${fx}/ops/.trash"
+        export MAC_OPS_DRY_RUN=true MAC_OPS_VERBOSE=true MAC_OPS_SCHEDULED=false
+        for f in core/config core/logger core/trash core/safety core/ignore utils/format utils/security-keywords utils/running; do
+            source "${MAC_OPS_ROOT}/lib/${f}.zsh"
+        done
+        source "${MAC_OPS_ROOT}/lib/modules/tmp-cleanup.zsh"
+        source "${MAC_OPS_ROOT}/lib/modules/cache-cleanup.zsh"
+        _mac_ops_fc_load_running_apps() { _MAC_OPS_FC_RUNNING_BUNDLES=""; return 0; }
+        mac_ops_cache_cleanup
+    ' _ "${MAC_OPS_ROOT}" "${fx}" 2>&1)
+    assert_output_contains "${out}" "Protected, skipped (cache-cleanup): ${fx}/home/Library/Caches/ms-playwright-mcp (reason: not a disposable cache)" "ms-playwright-mcp is never moved"
+    assert_output_contains "${out}" "Protected, skipped (cache-cleanup): ${fx}/home/Library/Caches/ms-playwright (reason: not a disposable cache)" "ms-playwright is never moved"
+    assert_output_contains "${out}" "Installed app cache protected: org.macopstestXfixture" "installed bundle ID still protects its cache"
+    assert_output_not_contains "${out}" "Installed app cache protected: org.macopstest.fixture" "a dot in a cache name is not a regex wildcard"
+    assert_eq "$(ls "${fx}/home/Library/Caches" | grep -c .)" "4" "dry-run moved nothing"
+}
+test_cache_cleanup_names
+
+# install / monitor setup: a failed launchctl load is an error with a
+# non-zero exit. launchctl is a shell function here, never the real one.
+test_install_launchctl_failure() {
+    print "[TEST] test_install_launchctl_failure"
+    local fx="${TEST_TMPDIR}/installfx" out mode
+    for mode in loadfail rcfail notlisted ok; do
+        mkdir -p "${fx}/${mode}/home"
+        out=$(HOME="${fx}/${mode}/home" zsh -f -c '
+            MAC_OPS_ROOT="$1"; mode="$2"; calls="$3"
+            export MAC_OPS_HOME="${HOME}/.mac-ops" MAC_OPS_LOG_DIR="${HOME}/.mac-ops/.logs"
+            export MAC_OPS_DRY_RUN=false MAC_OPS_SCHEDULED=false
+            source "${MAC_OPS_ROOT}/lib/core/config.zsh"; source "${MAC_OPS_ROOT}/lib/core/logger.zsh"
+            launchctl() {
+                print -r -- "$*" >> "${calls}"
+                case "$1:${mode}" in
+                    load:loadfail) print "Load failed: 5: Input/output error"; return 0 ;;
+                    load:rcfail) return 3 ;;
+                    list:notlisted|list:loadfail|list:rcfail) return 1 ;;
+                esac
+                return 0
+            }
+            [[ "$(whence -w launchctl)" == "launchctl: function" ]] || { print "REAL_LAUNCHCTL"; exit 9; }
+            source <(sed -n -e "/^_mac_ops_agent_bin_path() {/,/^}/p" -e "/^_mac_ops_install_agent() {/,/^}/p"                 -e "/^_mac_ops_cmd_install() {/,/^}/p" -e "/^_mac_ops_cmd_monitor() {/,/^}/p" "${MAC_OPS_ROOT}/bin/mac-ops")
+            n=0
+            rc=0; o=$(_mac_ops_cmd_install 2>&1) || rc=$?; print "install_rc=${rc}"
+            [[ "${o}" == *"[ERROR] launchctl load failed"* ]] && n=$((n + 1))
+            rc=0; o=$(_mac_ops_cmd_monitor setup 2>&1) || rc=$?; print "monitor_rc=${rc}"
+            [[ "${o}" == *"[ERROR] launchctl load failed"* ]] && n=$((n + 1))
+            print "${n}"
+        ' _ "${MAC_OPS_ROOT}" "${mode}" "${fx}/${mode}/calls" 2>&1)
+        assert_output_not_contains "${out}" "REAL_LAUNCHCTL" "${mode}: launchctl is the test function"
+        if [[ "${mode}" == ok ]]; then
+            assert_output_contains "${out}" "install_rc=0" "launchctl load ok: install exits 0"
+            assert_output_contains "${out}" "monitor_rc=0" "launchctl load ok: monitor setup exits 0"
+        else
+            assert_output_contains "${out}" "install_rc=1" "${mode}: install exits non-zero"
+            assert_output_contains "${out}" "monitor_rc=1" "${mode}: monitor setup exits non-zero"
+            assert_eq "${out##*$'\n'}" "2" "${mode}: failure logged as ERROR for both agents"
+        fi
+        assert_output_contains "$(cat "${fx}/${mode}/calls" 2>/dev/null)" "load ${fx}/${mode}/home/Library/LaunchAgents/com.mac-ops.cleanup.plist" "${mode}: load called on the fixture plist"
+    done
+}
+test_install_launchctl_failure
+
+# monitor kill: a protected process is skipped, an ordinary one gets SIGTERM.
+# ps and kill are shell functions over a fake process list; no real process
+# is listed or signalled.
+test_monitor_kill_protected() {
+    print "[TEST] test_monitor_kill_protected"
+    local fx="${TEST_TMPDIR}/monitorfx" out input
+    mkdir -p "${fx}/home"
+    for input in all 101 202; do
+        : > "${fx}/kills"
+        out=$(print -r -- "${input}" | HOME="${fx}/home" zsh -f -c '
+            MAC_OPS_ROOT="$1"; kills="$2"
+            export MAC_OPS_HOME="${HOME}/.mac-ops" MAC_OPS_LOG_DIR="${HOME}/.mac-ops/.logs" MAC_OPS_SCHEDULED=false
+            for f in core/config core/logger core/safety utils/format; do source "${MAC_OPS_ROOT}/lib/${f}.zsh"; done
+            source "${MAC_OPS_ROOT}/lib/modules/monitor.zsh"
+            ps() {
+                if [[ "$1" == "-p" ]]; then
+                    case "$2" in
+                        101) print -r -- "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer" ;;
+                        202) print -r -- "/usr/local/bin/my-node-app" ;;
+                    esac
+                    return 0
+                fi
+                print -r -- "  PID    RSS  %CPU COMM"
+                print -r -- "  101 2097152  1.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+                print -r -- "  202 2097152  1.0 /usr/local/bin/my-node-app"
+            }
+            kill() { print -r -- "$*" >> "${kills}"; return 0; }
+            [[ "$(whence -w kill)" == "kill: function" && "$(whence -w ps)" == "ps: function" ]] || { print REAL_KILL_OR_PS; exit 9; }
+            mac_ops_monitor_kill 500
+        ' _ "${MAC_OPS_ROOT}" "${fx}/kills" 2>&1)
+        assert_output_not_contains "${out}" "REAL_KILL_OR_PS" "monitor kill ${input}: kill and ps are test functions"
+        assert_eq "$(grep -c -- '-15 101' "${fx}/kills")" "0" "monitor kill ${input}: protected WindowServer (PID 101) is not signalled"
+        case "${input}" in
+            all|202)
+                assert_eq "$(cat "${fx}/kills")" "-15 202" "monitor kill ${input}: ordinary process (PID 202) gets SIGTERM" ;;
+            101)
+                assert_eq "$(grep -c . "${fx}/kills")" "0" "monitor kill 101: nothing signalled"
+                assert_output_contains "${out}" "Skipping protected process: WindowServer (PID 101)" "monitor kill 101: protected process reported as skipped" ;;
+        esac
+    done
+}
+test_monitor_kill_protected
+
 print ""
 
 # =============================================================================
@@ -1027,6 +1318,48 @@ test_failure_notification() {
 }
 
 test_failure_notification
+
+# The same failure is notified once per repeat interval; a new one at once;
+# a missing or corrupt state file means notify. Successful runs notify only
+# with Notify.OnSuccess.
+test_notification_dedup() {
+    print "[TEST] notification_dedup"
+    local start state="${MAC_OPS_HOME}/.notify-failure.state"
+    mkdir -p "${MAC_OPS_HOME}" "${MAC_OPS_LOG_DIR}"
+    rm -f -- "${state}"
+    _t13_fail() {
+        mac_ops_log_line_count; start="${REPLY}"
+        ( MAC_OPS_SCHEDULED=true; mac_ops_log_error "$1" )
+        : > "${OSA_CALLS}"
+        _t12_run_end "${start}" 0 >/dev/null 2>&1
+        grep -c . "${OSA_CALLS}"
+    }
+    assert_eq "$(_t13_fail "disk full at hour 1")" "1" "first failure: notified"
+    assert_eq "$([[ -f "${state}" ]] && head -n 1 "${state}" | grep -cE '^[0-9]+ [0-9a-f]{64}$')" "1" "failure state recorded as '<epoch> <sha256>'"
+    assert_eq "$(_t13_fail "disk full at hour 1")" "0" "same failure again within 24h: not notified"
+    assert_eq "$(_t13_fail "a different failure")" "1" "different failure: notified at once"
+    assert_eq "$(_t13_fail "a different failure")" "0" "that failure repeated: not notified"
+    print -r -- "garbage" > "${state}"
+    assert_eq "$(_t13_fail "a different failure")" "1" "corrupt state file: notified"
+    print -r -- "$(( $(date +%s) - 25 * 3600 )) $(cut -d' ' -f2 "${state}")" > "${state}"
+    assert_eq "$(_t13_fail "a different failure")" "1" "same failure after the repeat interval: notified again"
+    rm -f -- "${state}"
+    assert_eq "$(_t13_fail "a different failure")" "1" "missing state file: notified"
+    assert_eq "$(MAC_OPS_NOTIFY_REPEAT_HOURS=1; _t13_fail "a different failure")" "0" "repeat interval setting honoured"
+    unset -f _t13_fail
+
+    # Successful scheduled run that cleaned something: silent by default
+    : > "${OSA_CALLS}"
+    mac_ops_log_line_count; start="${REPLY}"
+    ( MAC_OPS_SCHEDULED=true MAC_OPS_CLEANED_COUNT=5 MAC_OPS_CLEANED_BYTES=100 MAC_OPS_KILLED_COUNT=0 MAC_OPS_DATA_MOVED_COUNT=0
+      mac_ops_notify_run_end "${start}" 0 1000 1000 ) >/dev/null 2>&1
+    assert_eq "$(grep -c . "${OSA_CALLS}")" "0" "successful scheduled run: no notification by default"
+    ( MAC_OPS_SCHEDULED=true MAC_OPS_NOTIFY_ON_SUCCESS=true MAC_OPS_CLEANED_COUNT=5 MAC_OPS_CLEANED_BYTES=100 MAC_OPS_KILLED_COUNT=0 MAC_OPS_DATA_MOVED_COUNT=0
+      mac_ops_notify_run_end "${start}" 0 1000 1000 ) >/dev/null 2>&1
+    assert_output_contains "$(cat "${OSA_CALLS}")" "Mac-Ops Cleanup Completed" "successful scheduled run: notified with Notify.OnSuccess=true"
+    rm -f -- "${state}"
+}
+test_notification_dedup
 unset -f osascript
 
 # =============================================================================

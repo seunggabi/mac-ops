@@ -99,7 +99,10 @@ _mac_ops_trash_path_valid() {
   local trash="${MAC_OPS_TRASH_DIR:a}"
   [[ "${trash}" != "/" && "${p:a}" == "${p}" && "${p}" == "${trash}/"?* ]] || return 1
   local rel="${p#"${trash}/"}"
-  case "${rel%%/*}" in
+  # Lowercased: on case-insensitive APFS ".INDEX.JSON" or ".Staging" name
+  # the real bookkeeping files
+  local first="${rel%%/*}"
+  case "${first:l}" in
     .index.json*|.index.lock*|.index.flock|.index-recovery|.staging) return 1 ;;
   esac
   return 0
@@ -175,16 +178,23 @@ _mac_ops_trash_restore_target_ok() {
     REPLY="self-protection rule ${REPLY}"
     return 1
   fi
-  if [[ "${p}" == "${MAC_OPS_TRASH_DIR:a}" || "${p}" == "${MAC_OPS_TRASH_DIR:a}/"* ]]; then
-    REPLY="inside the trash"
-    return 1
-  fi
-  for cand in "${p}" "${p:A}"; do
+  # Compared lowercased: the default APFS volume is case-insensitive, so
+  # ~/DOCUMENTS/x is ~/Documents/x
+  local lp="${p:l}" own lrule resolved="${p:A}"
+  for own in "${MAC_OPS_TRASH_DIR:a}" "${MAC_OPS_HOME:a}"; do
+    [[ -n "${own}" && "${own}" != "/" ]] || continue
+    if [[ "${lp}" == "${own:l}" || "${lp}" == "${own:l}/"* ]]; then
+      REPLY="inside the mac-ops home or trash (${own})"
+      return 1
+    fi
+  done
+  for cand in "${lp}" "${resolved:l}"; do
     for rule in "${MAC_OPS_WHITELIST[@]}"; do
       [[ -n "${rule}" ]] || continue
-      if [[ "${rule}" == "${HOME}/Library/Preferences" ]]; then
-        [[ "${cand}" == "${rule}" ]] || continue
-      elif [[ "${cand}" != "${rule}" && "${cand}" != "${rule}/"* ]]; then
+      lrule="${rule:l}"
+      if [[ "${lrule}" == "${HOME:l}/library/preferences" ]]; then
+        [[ "${cand}" == "${lrule}" ]] || continue
+      elif [[ "${cand}" != "${lrule}" && "${cand}" != "${lrule}/"* ]]; then
         continue
       fi
       REPLY="protected path rule ${rule}"
@@ -865,6 +875,18 @@ _mac_ops_migrate_plist_to_index() {
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# Did a move source vanish (moved or removed by someone else since it was
+# selected)? Only when nothing is at the path AND its parent directory
+# exists and is searchable: "! -e" is also true when the parent cannot be
+# searched (chmod 000, a TCC denial), which stays an error.
+# Usage: _mac_ops_trash_source_vanished <path>
+# -----------------------------------------------------------------------------
+_mac_ops_trash_source_vanished() {
+  local parent="${1:h}"
+  [[ ! -e "${1}" && ! -L "${1}" && -d "${parent}" && -x "${parent}" ]]
+}
+
+# -----------------------------------------------------------------------------
 # Atomic rename. Uses zsh's zf_mv, which is a plain rename(2): it either moves
 # the whole entry or fails, and never degrades to copy + delete the way
 # /bin/mv does when the rename is not possible.
@@ -1256,9 +1278,15 @@ mac_ops_trash_move() {
     return 1
   fi
 
-  # Check if source exists
+  # A source that no longer exists was moved or removed after it was
+  # selected (cache-cleanup and orphan-app can select the same cache
+  # directory in parallel): a skip, not a run error
   if [[ ! -e "${source_path}" ]]; then
-    mac_ops_log_error "Source does not exist: ${source_path}"
+    if _mac_ops_trash_source_vanished "${source_path}"; then
+      mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${source_path} (module: ${module_name})"
+    else
+      mac_ops_log_error "Source does not exist or cannot be reached (parent directory missing or not searchable): ${source_path}"
+    fi
     return 1
   fi
 
@@ -1266,6 +1294,10 @@ mac_ops_trash_move() {
   local abs_source
   abs_source=$(cd "$(dirname "${source_path}")" 2>/dev/null && print -- "${PWD}/$(basename "${source_path}")") || abs_source=""
   if [[ -z "${abs_source}" ]]; then
+    if _mac_ops_trash_source_vanished "${source_path}"; then
+      mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${source_path} (module: ${module_name})"
+      return 1
+    fi
     mac_ops_log_error "Failed to convert path: ${source_path}"
     return 1
   fi
@@ -1286,6 +1318,10 @@ mac_ops_trash_move() {
         return 1
         ;;
       unknown)
+        if _mac_ops_trash_source_vanished "${abs_source}"; then
+          mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${abs_source} (module: ${module_name})"
+          return 1
+        fi
         mac_ops_log_error "Not moved, cannot tell whether a running process has it open (lsof missing or failed): ${abs_source}"
         return 1
         ;;
@@ -1359,9 +1395,19 @@ mac_ops_trash_move() {
 
   # --- Slow path: verified copy, without holding the lock while copying ---
   _mac_ops_index_unlock
+  # The rename failed because the source vanished meanwhile (another module
+  # moved it): a skip. Anything else is a real failure below.
+  if _mac_ops_trash_source_vanished "${abs_source}"; then
+    mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${abs_source} (module: ${module_name})"
+    return 1
+  fi
   mac_ops_log_debug "Rename not possible, falling back to verified copy: ${abs_source}"
 
   if ! _mac_ops_trash_copy_verified "${abs_source}"; then
+    if _mac_ops_trash_source_vanished "${abs_source}"; then
+      mac_ops_log_info "Skipped, no longer exists (moved or removed while it was being copied): ${abs_source} (module: ${module_name})"
+      return 1
+    fi
     mac_ops_log_error "Failed to move file, source left untouched: ${abs_source} -> ${trash_path}"
     return 1
   fi
@@ -1943,6 +1989,41 @@ _mac_ops_trash_volume_free_kb() {
 }
 
 # -----------------------------------------------------------------------------
+# Remove empty leftover directories in the trash, deepest first, except an
+# indexed trash path (a trashed empty directory must stay restorable) and
+# the parent directories of indexed paths. The caller holds the index lock
+# and has the index loaded. Not for dry-run.
+# -----------------------------------------------------------------------------
+_mac_ops_trash_sweep_empty_dirs() {
+  setopt LOCAL_OPTIONS NO_ERR_EXIT
+  [[ -n "${MAC_OPS_TRASH_DIR}" && -d "${MAC_OPS_TRASH_DIR}" ]] || return 0
+  local -A sweep_keep
+  local key tp parent d
+  for key in "${_MAC_OPS_IDX_KEYS[@]}" "${_MAC_OPS_IDX_QKEYS[@]}"; do
+    tp="${_MAC_OPS_IDX_TRASH[${key}]}"
+    [[ -n "${tp}" ]] || continue
+    sweep_keep[${tp}]=1
+    parent="${tp%/*}"
+    while [[ "${parent}" == "${MAC_OPS_TRASH_DIR}/"* ]]; do
+      sweep_keep[${parent}]=1
+      parent="${parent%/*}"
+    done
+  done
+  # rmdir removes only empty directories; repeat so parents emptied by a
+  # pass are removed by the next one
+  local -i pass removed
+  for (( pass = 0; pass < 64; pass++ )); do
+    removed=0
+    while IFS= read -r -d '' d; do
+      [[ -n "${sweep_keep[${d}]+_}" ]] && continue
+      rmdir -- "${d}" 2>/dev/null && removed=$((removed + 1))
+    done < <(find "${MAC_OPS_TRASH_DIR}" -mindepth 1 -type d -empty -print0 2>/dev/null)
+    (( removed == 0 )) && break
+  done
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # Permanently delete expired items
 # Reconciles the index with the disk first, then deletes entries whose
 # expire_after is before the current time - except entries the reconcile of
@@ -1971,7 +2052,7 @@ mac_ops_trash_expire() {
   if [[ "${dry}" == true ]]; then
     mac_ops_log_info "[DRY_RUN] Will remove empty directories in ${MAC_OPS_TRASH_DIR}"
   else
-    find "${MAC_OPS_TRASH_DIR}" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    _mac_ops_trash_sweep_empty_dirs
   fi
   _mac_ops_trash_reconcile_locked
 
@@ -2122,7 +2203,7 @@ mac_ops_trash_expire() {
 
   # Clean up empty directories
   if [[ "${dry}" != true ]]; then
-    find "${MAC_OPS_TRASH_DIR}" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    _mac_ops_trash_sweep_empty_dirs
   fi
 
   _mac_ops_index_unlock
@@ -2316,7 +2397,7 @@ _mac_ops_trash_restore_key_locked() {
   mac_ops_index_write || true
 
   # Clean up empty directories
-  find "${MAC_OPS_TRASH_DIR}" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+  _mac_ops_trash_sweep_empty_dirs
 
   mac_ops_log_info "Restore completed: ${original_path}"
   REPLY="restored"

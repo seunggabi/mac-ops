@@ -10,8 +10,9 @@ MAC_OPS_CACHE_RECENT_DAYS=${MAC_OPS_CACHE_RECENT_DAYS:-7}  # Protect caches used
 
 # --- "Caches" that are not caches: never moved ---
 # ms-playwright: browser binaries used by running tools
+# ms-playwright-mcp: Playwright MCP server data (can hold a browser profile)
 # JetBrains: IDE indexes and caches (hours to rebuild)
-MAC_OPS_CACHE_PROTECTED_NAMES=("ms-playwright" "JetBrains")
+MAC_OPS_CACHE_PROTECTED_NAMES=("ms-playwright" "ms-playwright-mcp" "JetBrains")
 
 # -----------------------------------------------------------------------------
 # Internal: Print the package manager that owns a cache directory name
@@ -106,7 +107,8 @@ mac_ops_cache_cleanup() {
     fi
 
     # Skip if app is currently installed
-    if echo "${installed_bundles}" | grep -qx "${bundle_name}"; then
+    # Fixed-string match: a bundle ID's dots are not regex wildcards
+    if print -r -- "${installed_bundles}" | grep -qxF -- "${bundle_name}"; then
       mac_ops_log_debug "Installed app cache protected: ${bundle_name}"
       continue
     fi
@@ -155,8 +157,8 @@ mac_ops_cache_cleanup() {
     if [[ ${age_seconds} -ge ${threshold_seconds} ]]; then
       dir_size=$(mac_ops_get_dir_size "${bundle_dir}")
 
+      # (the guard logs the WARN with the limit, or DEBUG if it vanished)
       if ! mac_ops_check_size_guard "${bundle_dir}"; then
-        mac_ops_log_warn "Skipped due to size guard exceeded: ${bundle_name} ($(mac_ops_format_bytes ${dir_size}))"
         continue
       fi
 
