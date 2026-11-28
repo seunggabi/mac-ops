@@ -116,6 +116,7 @@ _mac_ops_fc_load_running_execs() {
     return 1
   fi
 
+  # shellcheck disable=SC2296  # zsh (f) flag: split on newlines
   lines=("${(@f)ps_out}")
   for line in "${lines[@]}"; do
     read -r pid ppid comm <<< "${line}"
