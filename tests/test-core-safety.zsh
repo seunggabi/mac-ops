@@ -869,6 +869,63 @@ test_trash_indexed_empty_dir_kept() {
 }
 test_trash_indexed_empty_dir_kept
 
+# A source that vanished between selection and move is a skip (no ERROR);
+# a move that genuinely fails is still an ERROR
+test_trash_move_vanished_source() {
+    print "[TEST] test_trash_move_vanished_source"
+    _t5_reset_trash
+    local base="${TEST_TMPDIR}/files/vanish" start rc out
+    rm -rf -- "${base}"; mkdir -p "${base}"
+    mkdir -p "${MAC_OPS_LOG_DIR}"
+
+    mac_ops_log_line_count; start="${REPLY}"
+    rc=0; out=$(mac_ops_trash_move "${base}/gone" "test" "cache-cleanup" 2>&1) || rc=$?
+    assert_eq "${rc}" "1" "vanished source: not moved"
+    assert_output_contains "${out}" "Skipped, no longer exists" "vanished source: logged as a skip"
+    mac_ops_log_count_since "${start}" ERROR
+    assert_eq "${REPLY}" "0" "vanished source: no run error"
+
+    # Vanishes after the checks, while waiting to be renamed
+    mkdir -p "${base}/race1"; print x > "${base}/race1/f"
+    mac_ops_log_line_count; start="${REPLY}"
+    rc=0; out=$(
+        _mac_ops_trash_rename() { command rm -rf -- "${1}"; return 1; }
+        mac_ops_trash_move "${base}/race1" "test" "orphan-app-cleanup" 2>&1) || rc=$?
+    assert_eq "${rc}" "1" "source vanished before the rename: not moved"
+    mac_ops_log_count_since "${start}" ERROR
+    assert_eq "${REPLY}" "0" "source vanished before the rename: no run error"
+
+    # Two modules moving the same directory at once: one moves it, no ERROR
+    mkdir -p "${base}/Caches/com.example.shared"; print x > "${base}/Caches/com.example.shared/f"
+    mac_ops_log_line_count; start="${REPLY}"
+    ( mac_ops_trash_move "${base}/Caches/com.example.shared" "cache-expired" "cache-cleanup" >/dev/null 2>&1 ) &
+    ( mac_ops_trash_move "${base}/Caches/com.example.shared" "orphan-app-cache" "orphan-app-cleanup" >/dev/null 2>&1 ) &
+    wait
+    mac_ops_log_count_since "${start}" ERROR
+    assert_eq "${REPLY}" "0" "parallel moves of the same directory: no run error"
+    mac_ops_index_read
+    local k n=0
+    for k in "${_MAC_OPS_IDX_KEYS[@]}"; do
+        [[ "${_MAC_OPS_IDX_ORIG[${k}]}" == "${base}/Caches/com.example.shared" ]] && n=$((n + 1))
+    done
+    assert_eq "${n}/$([[ -e "${base}/Caches/com.example.shared" ]] && print left || print moved)" "1/moved" "parallel moves of the same directory: moved once"
+
+    # A genuine failure (source still there) is not masked
+    mkdir -p "${base}/stuck"; print x > "${base}/stuck/f"
+    mac_ops_log_line_count; start="${REPLY}"
+    rc=0; out=$(
+        _mac_ops_trash_rename() { return 1; }
+        _mac_ops_trash_copy_verified() { return 1; }
+        mac_ops_trash_move "${base}/stuck" "test" "cache-cleanup" 2>&1) || rc=$?
+    assert_eq "${rc}" "1" "failed move: returns 1"
+    mac_ops_log_count_since "${start}" ERROR
+    assert_eq "${REPLY}" "1" "failed move of an existing source: still an ERROR"
+    assert_eq "$(cat "${base}/stuck/f" 2>/dev/null)" "x" "failed move leaves the source in place"
+    rm -rf -- "${base}"
+    _t5_reset_trash
+}
+test_trash_move_vanished_source
+
 print ""
 
 # =============================================================================

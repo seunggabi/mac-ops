@@ -1266,9 +1266,11 @@ mac_ops_trash_move() {
     return 1
   fi
 
-  # Check if source exists
+  # A source that no longer exists was moved or removed after it was
+  # selected (cache-cleanup and orphan-app can select the same cache
+  # directory in parallel): a skip, not a run error
   if [[ ! -e "${source_path}" ]]; then
-    mac_ops_log_error "Source does not exist: ${source_path}"
+    mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${source_path} (module: ${module_name})"
     return 1
   fi
 
@@ -1276,6 +1278,10 @@ mac_ops_trash_move() {
   local abs_source
   abs_source=$(cd "$(dirname "${source_path}")" 2>/dev/null && print -- "${PWD}/$(basename "${source_path}")") || abs_source=""
   if [[ -z "${abs_source}" ]]; then
+    if [[ ! -e "${source_path}" && ! -L "${source_path}" ]]; then
+      mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${source_path} (module: ${module_name})"
+      return 1
+    fi
     mac_ops_log_error "Failed to convert path: ${source_path}"
     return 1
   fi
@@ -1296,6 +1302,10 @@ mac_ops_trash_move() {
         return 1
         ;;
       unknown)
+        if [[ ! -e "${abs_source}" && ! -L "${abs_source}" ]]; then
+          mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${abs_source} (module: ${module_name})"
+          return 1
+        fi
         mac_ops_log_error "Not moved, cannot tell whether a running process has it open (lsof missing or failed): ${abs_source}"
         return 1
         ;;
@@ -1369,9 +1379,19 @@ mac_ops_trash_move() {
 
   # --- Slow path: verified copy, without holding the lock while copying ---
   _mac_ops_index_unlock
+  # The rename failed because the source vanished meanwhile (another module
+  # moved it): a skip. Anything else is a real failure below.
+  if [[ ! -e "${abs_source}" && ! -L "${abs_source}" ]]; then
+    mac_ops_log_info "Skipped, no longer exists (moved or removed since it was selected): ${abs_source} (module: ${module_name})"
+    return 1
+  fi
   mac_ops_log_debug "Rename not possible, falling back to verified copy: ${abs_source}"
 
   if ! _mac_ops_trash_copy_verified "${abs_source}"; then
+    if [[ ! -e "${abs_source}" && ! -L "${abs_source}" ]]; then
+      mac_ops_log_info "Skipped, no longer exists (moved or removed while it was being copied): ${abs_source} (module: ${module_name})"
+      return 1
+    fi
     mac_ops_log_error "Failed to move file, source left untouched: ${abs_source} -> ${trash_path}"
     return 1
   fi
