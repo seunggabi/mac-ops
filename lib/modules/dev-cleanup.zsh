@@ -8,6 +8,36 @@
 MAC_OPS_DEV_CACHE_MAX_AGE_DAYS=${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS:-30}
 
 # -----------------------------------------------------------------------------
+# Move every top-level item of a cache directory that passes the file-cleanup
+# guard (security software, open items, anything used inside since <cutoff>)
+# and the user ignore rules. Runs in the current shell so mac_ops_trash_move
+# keeps its counters. In dry-run mac_ops_trash_move only reports, so dry-run
+# lists exactly the items a real run would move.
+# REPLY: total size of the items moved (bytes)
+# Usage: _mac_ops_dev_trash_items <dir> <reason> <cutoff>
+# -----------------------------------------------------------------------------
+_mac_ops_dev_trash_items() {
+  local _dev_dir="${1}" _dev_reason="${2}" _dev_cutoff="${3}"
+  local item="" _dev_sz=0 _dev_moved=0
+
+  for item in "${_dev_dir}"/*(N); do
+    [[ ! -e "${item}" ]] && continue
+    _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}" || continue
+    if mac_ops_ignore_check_path "${item}"; then
+      mac_ops_log_debug "User ignore (path): ${item}"
+      continue
+    fi
+    _dev_sz=$(mac_ops_get_dir_size "${item}")
+    if mac_ops_trash_move "${item}" "${_dev_reason}" "dev-cleanup"; then
+      _dev_moved=$((_dev_moved + _dev_sz))
+    fi
+  done
+
+  REPLY="${_dev_moved}"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # Xcode cache cleanup
 # DerivedData and CoreSimulator cache; Archives are only reported
 # -----------------------------------------------------------------------------
@@ -36,26 +66,14 @@ _mac_ops_dev_xcode() {
 
   mac_ops_log_info "Cleaning Xcode cache..."
 
-  local _dev_cutoff="" _dev_sz=0 _dev_cleaned=0
+  local _dev_cutoff="" _dev_cleaned=0
   _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
   # DerivedData: only items with nothing inside modified or read within
   # MAC_OPS_DEV_CACHE_MAX_AGE_DAYS (a project opened last week keeps its index).
-  # Dry-run takes the same path, so it lists exactly the items a real run
-  # would move (trash_move only reports in dry-run).
   if [[ -d "${xcode_derived}" ]]; then
-    for item in "${xcode_derived}"/*(N); do
-      [[ ! -e "${item}" ]] && continue
-      _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}" || continue
-      if mac_ops_ignore_check_path "${item}"; then
-        mac_ops_log_debug "User ignore (path): ${item}"
-        continue
-      fi
-      _dev_sz=$(mac_ops_get_dir_size "${item}")
-      if mac_ops_trash_move "${item}" "Xcode DerivedData cleanup" "dev-cleanup"; then
-        _dev_cleaned=$((_dev_cleaned + _dev_sz))
-      fi
-    done
+    _mac_ops_dev_trash_items "${xcode_derived}" "Xcode DerivedData cleanup" "${_dev_cutoff}"
+    _dev_cleaned="${REPLY}"
 
     if [[ "${MAC_OPS_DRY_RUN}" != "true" && ${_dev_cleaned} -gt 0 ]]; then
       MAC_OPS_CLEANED_BYTES=$((MAC_OPS_CLEANED_BYTES + _dev_cleaned))
@@ -476,23 +494,12 @@ _mac_ops_dev_cocoapods() {
 
   mac_ops_log_info "Cleaning CocoaPods cache..."
 
-  local _dev_cutoff="" _dev_sz=0 _dev_cleaned=0
+  local _dev_cutoff="" _dev_cleaned=0
   _dev_cutoff=$(_mac_ops_fc_cutoff_time "${MAC_OPS_DEV_CACHE_MAX_AGE_DAYS}")
 
-  # Only items with nothing inside used within MAC_OPS_DEV_CACHE_MAX_AGE_DAYS.
-  # Dry-run takes the same path, so it lists exactly what a real run would move
-  for item in "${pod_cache}"/*(N); do
-    [[ ! -e "${item}" ]] && continue
-    _mac_ops_fc_guard "${item}" "dev-cleanup" "${_dev_cutoff}" || continue
-    if mac_ops_ignore_check_path "${item}"; then
-      mac_ops_log_debug "User ignore (path): ${item}"
-      continue
-    fi
-    _dev_sz=$(mac_ops_get_dir_size "${item}")
-    if mac_ops_trash_move "${item}" "CocoaPods cache cleanup" "dev-cleanup"; then
-      _dev_cleaned=$((_dev_cleaned + _dev_sz))
-    fi
-  done
+  # Only items with nothing inside used within MAC_OPS_DEV_CACHE_MAX_AGE_DAYS
+  _mac_ops_dev_trash_items "${pod_cache}" "CocoaPods cache cleanup" "${_dev_cutoff}"
+  _dev_cleaned="${REPLY}"
 
   if [[ "${MAC_OPS_DRY_RUN}" == "true" || ${_dev_cleaned} -eq 0 ]]; then
     return 0
