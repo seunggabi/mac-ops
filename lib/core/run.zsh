@@ -87,6 +87,21 @@ mac_ops_run_finish() {
 }
 
 # -----------------------------------------------------------------------------
+# Drop a run that never took the lock (another run holds it): no manifest,
+# no notification, move list removed. The exit hooks do nothing afterwards.
+# -----------------------------------------------------------------------------
+mac_ops_run_discard() {
+  setopt LOCAL_OPTIONS NO_ERR_EXIT
+  [[ "${_MAC_OPS_RUN_STATE}" == "active" ]] || return 0
+  _MAC_OPS_RUN_STATE="done"
+  if [[ -n "${MAC_OPS_RUN_MOVES_FILE}" && "${MAC_OPS_RUN_MOVES_FILE}" == *"/run_"*".moves" ]]; then
+    rm -f "${MAC_OPS_RUN_MOVES_FILE}" 2>/dev/null
+  fi
+  MAC_OPS_RUN_MOVES_FILE=""
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # A run that did not reach its normal end: log it and finish with a non-zero
 # status. Only the main shell acts (module subshells inherit the traps).
 # Usage: _mac_ops_run_abort <exit_status> <what happened>

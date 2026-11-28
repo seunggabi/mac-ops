@@ -135,9 +135,17 @@ _mac_ops_cmd_run() {
   mac_ops_log_rotate
   mac_ops_log_line_count; MAC_OPS_RUN_LOG_START="${REPLY}"
 
-  # 5. Acquire lock - exit on failure (held until mac_ops_run_finish)
-  if ! mac_ops_acquire_lock; then
-    mac_ops_log_error "Another mac-ops instance is already running. Exiting."
+  # 5. Acquire lock (held until mac_ops_run_finish). Colliding with another
+  #    run (a scheduled run during a manual one) is not a failure: no
+  #    manifest, no notification, exit 0. A lock error is a failed run.
+  local lock_rc=0
+  mac_ops_acquire_lock || lock_rc=$?
+  if [[ "${lock_rc}" == "1" ]]; then
+    mac_ops_log_info "Another mac-ops run is in progress, skipping this run"
+    mac_ops_run_discard
+    return 0
+  elif [[ "${lock_rc}" != "0" ]]; then
+    mac_ops_log_error "Cannot acquire the run lock. Exiting."
     mac_ops_run_finish 1
     return 1
   fi

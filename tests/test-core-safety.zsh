@@ -910,6 +910,132 @@ test_run_lock_held
 test_run_errexit_abort
 test_run_errexit_ignored_where_off
 test_run_term_signal
+
+# Run lock: stale detection by PID plus process start time, atomic acquire
+_tl_lock() {
+    fx_zsh -- "
+        source \"\${MAC_OPS_ROOT}/lib/core/lock.zsh\"
+        mac_ops_init_dirs
+        $1"
+}
+_tl_start_of() {
+    _tl_lock "_mac_ops_lock_pid_start $1 && print -r -- \"\${REPLY}\"" 2>/dev/null
+}
+
+test_run_lock_stale_and_live() {
+    reset_fixture
+    local out rc lock="${FX_OPS}/mac-ops.lock" me_start
+    me_start=$(_tl_start_of $$)
+    assert_eq "${me_start//[0-9]/}" "" "start time of a live PID is read (digits only)"
+
+    # PID reused: the PID is alive (this test shell) but started at another time
+    print -r -- "$$ 12345" > "${lock}"
+    out=$(_tl_lock 'rc=0; mac_ops_acquire_lock || rc=$?; print "rc=${rc} holder=$(cut -d" " -f1 "${MAC_OPS_LOCK_FILE}") self=${sysparams[pid]}"' 2>&1)
+    assert_output_contains "${out}" "rc=0" "stale lock with a reused PID is cleared"
+    [[ "${out}" =~ "holder=([0-9]+) self=([0-9]+)" ]] && assert_eq "${match[1]}" "${match[2]}" "new lock holds the acquiring PID"
+    assert_output_contains "${out}" "Stale run lock" "reused PID logged as stale"
+
+    # Live lock: this shell with its real start time, acquired from a subprocess
+    print -r -- "$$ ${me_start}" > "${lock}"
+    out=$(_tl_lock 'rc=0; mac_ops_acquire_lock || rc=$?; print "rc=${rc}"' 2>&1)
+    assert_output_contains "${out}" "rc=1" "live lock blocks another run (return 1)"
+    assert_eq "$(cat "${lock}")" "$$ ${me_start}" "live lock left untouched"
+
+    # Dead PID
+    print -r -- "999999 12345" > "${lock}"
+    out=$(_tl_lock 'rc=0; mac_ops_acquire_lock || rc=$?; print "rc=${rc}"' 2>&1)
+    assert_output_contains "${out}" "rc=0" "lock of a dead PID is cleared"
+
+    # Legacy PID-only lock: live when the process started before the file was written
+    print -r -- "$$" > "${lock}"
+    out=$(_tl_lock 'rc=0; mac_ops_acquire_lock || rc=$?; print "rc=${rc}"' 2>&1)
+    assert_output_contains "${out}" "rc=1" "legacy PID-only lock of a live run blocks"
+    touch -t 200001010000 "${lock}"
+    out=$(_tl_lock 'rc=0; mac_ops_acquire_lock || rc=$?; print "rc=${rc}"' 2>&1)
+    assert_output_contains "${out}" "rc=0" "legacy PID-only lock older than its process (PID reused) is cleared"
+
+    # Cannot create the lock: an error (2), not "another run"
+    rm -f "${lock}"
+    out=$(fx_env MAC_OPS_LOCK_FILE="${FX_OPS}/missing-dir/mac-ops.lock" zsh -f -c "
+        MAC_OPS_ROOT='${MAC_OPS_ROOT}'
+        source \"\${MAC_OPS_ROOT}/lib/core/config.zsh\"; source \"\${MAC_OPS_ROOT}/lib/core/logger.zsh\"
+        source \"\${MAC_OPS_ROOT}/lib/core/lock.zsh\"
+        rc=0; mac_ops_acquire_lock || rc=\$?; print \"rc=\${rc}\"" 2>&1)
+    assert_output_contains "${out}" "rc=2" "lock that cannot be created returns 2"
+}
+
+test_run_lock_race() {
+    reset_fixture
+    local lock="${FX_OPS}/mac-ops.lock" i
+    print -r -- "999999 12345" > "${lock}"
+    mkdir -p "${FX_OPS}/race"
+    # Every child stays alive until all have tried, so no lock goes stale
+    for i in 1 2 3 4 5; do
+        _tl_lock "rc=0; mac_ops_acquire_lock || rc=\$?; print \${rc} > '${FX_OPS}/race/${i}'
+            n=0; while [[ \$(ls '${FX_OPS}/race' | wc -l) -lt 5 && \$n -lt 100 ]]; do sleep 0.1; n=\$((n+1)); done
+            sleep 0.5" >/dev/null 2>&1 &
+    done
+    wait
+    assert_eq "$(cat "${FX_OPS}"/race/* | grep -c '^0$')" "1" "5 runs on one stale lock: exactly one wins"
+    assert_eq "$(cat "${FX_OPS}"/race/* | grep -c '^1$')" "4" "5 runs on one stale lock: the others see a live run"
+}
+
+test_run_lock_subshell_and_or_true() {
+    reset_fixture
+    local out
+    out=$(_ta_run '( mac_ops_release_lock )
+        [[ -f "${MAC_OPS_LOCK_FILE}" ]] && print "LOCK_KEPT_BY_SUBSHELL_RELEASE"
+        f() { false; print "F_CONTINUES"; }
+        f || true
+        [[ -f "${MAC_OPS_LOCK_FILE}" ]] && print "LOCK_KEPT_AFTER_OR_TRUE"
+        mac_ops_run_finish 0
+        [[ -f "${MAC_OPS_LOCK_FILE}" ]] || print "LOCK_RELEASED_AT_FINISH"' 2>&1)
+    assert_output_contains "${out}" "LOCK_KEPT_BY_SUBSHELL_RELEASE" "a subshell cannot release the parent run lock"
+    assert_output_contains "${out}" "F_CONTINUES" "failure inside 'func || true' does not abort under ERR_EXIT"
+    assert_output_contains "${out}" "LOCK_KEPT_AFTER_OR_TRUE" "failure inside 'func || true' keeps the lock (no ZERR finish)"
+    assert_output_contains "${out}" "LOCK_RELEASED_AT_FINISH" "lock released at finish"
+    assert_output_not_contains "$(cat "${TA_LOG}" 2>/dev/null)" "aborted" "'func || true' failure: no abort logged"
+}
+
+# A run that finds another live run: no manifest, no notification, no move list
+test_run_lock_collision_discard() {
+    reset_fixture
+    local out rc=0 me_start
+    me_start=$(_tl_start_of $$)
+    mkdir -p "${FX_OPS}"
+    print -r -- "$$ ${me_start}" > "${FX_OPS}/mac-ops.lock"
+    out=$(fx_zsh MAC_OPS_SCHEDULED=true -- "
+        source \"\${MAC_OPS_ROOT}/lib/core/lock.zsh\"
+        source \"\${MAC_OPS_ROOT}/lib/core/trash.zsh\"
+        source \"\${MAC_OPS_ROOT}/lib/core/run.zsh\"
+        source \"\${MAC_OPS_ROOT}/lib/utils/format.zsh\"
+        source \"\${MAC_OPS_ROOT}/lib/utils/notify.zsh\"
+        osascript() { print -r -- \"\$*\" >> '${FX_OPS}/osa.calls'; }
+        mac_ops_init_dirs
+        mac_ops_run_start
+        mac_ops_setup_trap
+        [[ -f \"\${MAC_OPS_RUN_MOVES_FILE}\" ]] && print MOVES_CREATED
+        lock_rc=0; mac_ops_acquire_lock || lock_rc=\$?
+        print \"lock_rc=\${lock_rc}\"
+        mac_ops_run_discard
+        exit 0" 2>&1) || rc=$?
+    assert_eq "${rc}" "0" "collision: exit 0"
+    assert_output_contains "${out}" "lock_rc=1" "collision: acquire returns 1"
+    assert_output_contains "${out}" "MOVES_CREATED" "collision: move list existed before the lock"
+    assert_eq "$(ls "${FX_OPS}/runs" 2>/dev/null | grep -c .)" "0" "collision: no manifest written"
+    assert_eq "$(ls "${FX_OPS}/.tmp" 2>/dev/null | grep -c 'moves$')" "0" "collision: move list removed"
+    assert_eq "$(cat "${FX_OPS}/osa.calls" 2>/dev/null | grep -c .)" "0" "collision: no notification"
+    assert_output_contains "$(cat "${TA_LOG}" 2>/dev/null)" "[INFO] Another mac-ops run is in progress" "collision: logged as INFO"
+    assert_output_not_contains "$(cat "${TA_LOG}" 2>/dev/null)" "[ERROR]" "collision: no ERROR logged"
+    assert_eq "$(cat "${FX_OPS}/mac-ops.lock")" "$$ ${me_start}" "collision: the other run's lock is untouched"
+    # bin/mac-ops handles return 1 by discarding and exiting 0
+    assert_output_contains "$(cat "${MAC_OPS_ROOT}/bin/mac-ops")" 'mac_ops_run_discard' "bin/mac-ops discards a colliding run"
+}
+
+test_run_lock_stale_and_live
+test_run_lock_race
+test_run_lock_subshell_and_or_true
+test_run_lock_collision_discard
 test_run_explicit_exit
 
 # =============================================================================
