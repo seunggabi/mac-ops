@@ -82,7 +82,7 @@ export MAC_OPS_VAR_FOLDERS_DIR="${TEST_TMPDIR}/vf"
 mkdir -p "${HOME}" "${MAC_OPS_TMP_DIR}" "${MAC_OPS_VAR_FOLDERS_DIR}"
 
 for lib_file in core/config core/logger core/lock core/trash core/safety core/ignore core/disk \
-    utils/plist-helper utils/format utils/security-keywords utils/running \
+    utils/format utils/security-keywords utils/running \
     modules/tmp-cleanup modules/log-cleanup modules/cache-cleanup \
     modules/browser-cleanup modules/dev-cleanup; do
     source "${MAC_OPS_ROOT}/lib/${lib_file}.zsh"

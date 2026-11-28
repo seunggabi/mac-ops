@@ -55,35 +55,7 @@ mac_ops_free_change_text() {
   fi
 }
 
-# Convert seconds to human-readable format
-# Args: seconds
-# Returns: Outputs formatted string to stdout
-mac_ops_format_duration() {
-  local seconds="$1"
-
-  if [[ -z "$seconds" || ! "$seconds" =~ ^[0-9]+$ ]]; then
-    echo "0s"
-    return 0
-  fi
-
-  if (( seconds < 60 )); then
-    echo "${seconds}s"
-  elif (( seconds < 3600 )); then
-    local mins=$(( seconds / 60 ))
-    local secs=$(( seconds % 60 ))
-    echo "${mins}m ${secs}s"
-  else
-    local hours=$(( seconds / 3600 ))
-    local mins=$(( (seconds % 3600) / 60 ))
-    echo "${hours}h ${mins}m"
-  fi
-}
-
-# ANSI 색상 코드
-mac_ops_color_red() {
-  echo "\033[31m${1}\033[0m"
-}
-
+# ANSI color codes
 mac_ops_color_green() {
   echo "\033[32m${1}\033[0m"
 }
@@ -100,10 +72,6 @@ mac_ops_color_bold() {
   echo "\033[1m${1}\033[0m"
 }
 
-mac_ops_color_reset() {
-  echo "\033[0m"
-}
-
 # Print header (separator + title)
 # Args: title
 mac_ops_print_header() {
@@ -113,31 +81,6 @@ mac_ops_print_header() {
   echo "$(mac_ops_color_bold "==========================================")"
   echo "$(mac_ops_color_bold "$title")"
   echo "$(mac_ops_color_bold "==========================================")"
-  echo ""
-}
-
-# Print execution summary
-# Args: cleaned_count, cleaned_bytes, killed_procs
-mac_ops_print_summary() {
-  local cleaned_count="$1"
-  local cleaned_bytes="$2"
-  local killed_procs="$3"
-
-  echo ""
-  echo "$(mac_ops_color_bold "=== Execution Summary ===")"
-
-  if [[ -n "$cleaned_count" && "$cleaned_count" != "0" ]]; then
-    echo "$(mac_ops_color_green "✓") $(mac_ops_trash_summary_text "$cleaned_count" "$cleaned_bytes")"
-  fi
-
-  if [[ -n "$killed_procs" && "$killed_procs" != "0" ]]; then
-    echo "$(mac_ops_color_green "✓") Processes terminated: ${killed_procs} items"
-  fi
-
-  if [[ "$cleaned_count" == "0" && "$killed_procs" == "0" ]]; then
-    echo "$(mac_ops_color_blue "ℹ") No items to clean"
-  fi
-
   echo ""
 }
 
@@ -265,19 +208,4 @@ mac_ops_print_report() {
   fi
 
   echo ""
-}
-
-# Print table row (aligned 3 columns)
-# Args: col1, col2, col3
-mac_ops_print_table_row() {
-  local col1="$1"
-  local col2="$2"
-  local col3="$3"
-
-  # Set width for each column
-  local width1=30
-  local width2=40
-  local width3=20
-
-  printf "%-${width1}s %-${width2}s %-${width3}s\n" "$col1" "$col2" "$col3"
 }

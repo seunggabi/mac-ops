@@ -96,9 +96,8 @@ MAC_OPS_PROTECTED_PROCESSES=(
   "opendirectoryd"
 )
 
-# --- Size limits ---
+# --- Size limit ---
 MAC_OPS_MAX_SINGLE_FILE_BYTES=${MAC_OPS_MAX_SINGLE_FILE_BYTES:-2147483648}   # 2GB (setting MaxSingleFileBytes)
-MAC_OPS_MAX_BATCH_BYTES=10737418240        # 10GB
 
 # -----------------------------------------------------------------------------
 # Self-protection match: 0 if path is (under) the tool's own home or a
