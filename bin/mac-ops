@@ -38,6 +38,19 @@ source "${MAC_OPS_ROOT}/lib/modules/browser-cleanup.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/analyze.zsh"
 source "${MAC_OPS_ROOT}/lib/modules/monitor.zsh"
 
+# --- --dry-run on the command line wins over DryRun in config.plist ---
+# (config.plist is loaded after argument parsing and could reset the flag)
+_MAC_OPS_CLI_DRY_RUN=false
+functions -c mac_ops_load_config _mac_ops_load_config_file
+mac_ops_load_config() {
+  local rc=0
+  _mac_ops_load_config_file "$@" || rc=$?
+  if [[ "${_MAC_OPS_CLI_DRY_RUN}" == "true" ]]; then
+    MAC_OPS_DRY_RUN=true
+  fi
+  return ${rc}
+}
+
 # --- Version (from git tag or VERSION file) ---
 if [[ -d "${MAC_OPS_ROOT}/.git" ]]; then
   # Development mode: use git tag
@@ -243,7 +256,7 @@ _mac_ops_cmd_run() {
 # status command
 # =============================================================================
 _mac_ops_cmd_status() {
-  mac_ops_init_dirs
+  # Read-only: no directory creation, no index write, no migration
   mac_ops_load_config
 
   # Trash status
@@ -286,8 +299,10 @@ _mac_ops_cmd_restore() {
     return 1
   fi
 
-  mac_ops_init_dirs
   mac_ops_load_config
+  if [[ "${MAC_OPS_DRY_RUN}" != "true" ]]; then
+    mac_ops_init_dirs
+  fi
   mac_ops_trash_restore "${restore_path}"
 }
 
@@ -295,7 +310,7 @@ _mac_ops_cmd_restore() {
 # list-trash command
 # =============================================================================
 _mac_ops_cmd_list_trash() {
-  mac_ops_init_dirs
+  # Read-only: no directory creation, no index write, no migration
   mac_ops_load_config
   mac_ops_trash_list
 }
@@ -304,8 +319,10 @@ _mac_ops_cmd_list_trash() {
 # purge command
 # =============================================================================
 _mac_ops_cmd_purge() {
-  mac_ops_init_dirs
   mac_ops_load_config
+  if [[ "${MAC_OPS_DRY_RUN}" != "true" ]]; then
+    mac_ops_init_dirs
+  fi
   mac_ops_trash_expire
 }
 
@@ -365,6 +382,12 @@ _mac_ops_install_agent() {
     return 1
   fi
 
+  if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
+    mac_ops_log_info "[DRY_RUN] Will write ${plist_dst} (runs ${bin_path}) and load it with launchctl"
+    REPLY="${bin_path}"
+    return 0
+  fi
+
   # 1. Ensure LaunchAgents directory
   mkdir -p "${HOME}/Library/LaunchAgents" 2>/dev/null || true
 
@@ -387,11 +410,13 @@ _mac_ops_install_agent() {
 }
 
 # -----------------------------------------------------------------------------
-# Report installed agent plists and whether their executable still exists.
-# Read-only. Usage: _mac_ops_report_agents
+# Report installed agent plists and whether their executable is usable:
+# BROKEN when the program path is unreadable or does not exist, STALE when it
+# is a versioned Homebrew Cellar path (deleted by the next "brew upgrade").
+# Read-only. Usage: _mac_ops_report_agents [launch_agents_dir]
 # -----------------------------------------------------------------------------
 _mac_ops_report_agents() {
-  local agent_dir="${HOME}/Library/LaunchAgents"
+  local agent_dir="${1:-${HOME}/Library/LaunchAgents}"
   local label fix_cmd plist target
   local found=0
 
@@ -401,9 +426,9 @@ _mac_ops_report_agents() {
     found=$((found + 1))
 
     if [[ "${label}" == "monitor" ]]; then
-      fix_cmd="mac-ops monitor setup"
+      fix_cmd="mac-ops monitor unsetup && mac-ops monitor setup"
     else
-      fix_cmd="mac-ops install"
+      fix_cmd="mac-ops uninstall && mac-ops install"
     fi
 
     target=$(plutil -extract ProgramArguments.0 raw -o - "${plist}" 2>/dev/null) || target=""
@@ -415,6 +440,10 @@ _mac_ops_report_agents() {
       print "com.mac-ops.${label}: BROKEN - plist points at a file that does not exist:"
       print "  ${target}"
       print "  The agent fails silently on every run. Fix: ${fix_cmd}"
+    elif [[ "${target}" == */Cellar/* ]]; then
+      print "com.mac-ops.${label}: STALE - plist points at a versioned Homebrew Cellar path:"
+      print "  ${target}"
+      print "  It stops working after the next 'brew upgrade mac-ops'. Fix: ${fix_cmd}"
     else
       print "com.mac-ops.${label}: OK -> ${target}"
     fi
@@ -435,6 +464,8 @@ _mac_ops_cmd_install() {
   fi
   local bin_path="${REPLY}"
   local plist_dst="${HOME}/Library/LaunchAgents/com.mac-ops.cleanup.plist"
+
+  [[ "${MAC_OPS_DRY_RUN}" == "true" ]] && return 0
 
   mac_ops_log_info "launchd agent installed: ${plist_dst} (runs ${bin_path})"
 
@@ -460,6 +491,11 @@ _mac_ops_cmd_uninstall() {
 
   if [[ ! -f "${plist_path}" ]]; then
     mac_ops_log_warn "launchd agent is not installed."
+    return 0
+  fi
+
+  if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
+    mac_ops_log_info "[DRY_RUN] Will unload and remove ${plist_path}"
     return 0
   fi
 
@@ -509,12 +545,17 @@ _mac_ops_cmd_monitor() {
       if ! _mac_ops_install_agent "com.mac-ops.monitor.plist"; then
         return 1
       fi
+      [[ "${MAC_OPS_DRY_RUN}" == "true" ]] && return 0
       mac_ops_log_info "Monitor launchd agent installed (every 5 min): ${HOME}/Library/LaunchAgents/com.mac-ops.monitor.plist (runs ${REPLY})"
       ;;
     unsetup)
       local plist_path="${HOME}/Library/LaunchAgents/com.mac-ops.monitor.plist"
       if [[ ! -f "${plist_path}" ]]; then
         mac_ops_log_warn "Monitor launchd agent is not installed."
+        return 0
+      fi
+      if [[ "${MAC_OPS_DRY_RUN}" == "true" ]]; then
+        mac_ops_log_info "[DRY_RUN] Will unload and remove ${plist_path}"
         return 0
       fi
       launchctl unload "${plist_path}" 2>/dev/null || true
@@ -576,7 +617,18 @@ _mac_ops_main() {
         command="monitor"
         shift
         # Capture remaining args as monitor subcommand (top/kill/collect/--hours)
-        monitor_subcmd=("$@")
+        # --dry-run is a global option: honour it here too, so
+        # "monitor setup --dry-run" does not install for real
+        local monitor_arg
+        monitor_subcmd=()
+        for monitor_arg in "$@"; do
+          if [[ "${monitor_arg}" == "--dry-run" ]]; then
+            MAC_OPS_DRY_RUN=true
+            _MAC_OPS_CLI_DRY_RUN=true
+          else
+            monitor_subcmd+=("${monitor_arg}")
+          fi
+        done
         set --  # clear positional params to end the while loop
         ;;
       __agent-bin-path)
@@ -597,6 +649,7 @@ _mac_ops_main() {
         ;;
       --dry-run)
         MAC_OPS_DRY_RUN=true
+        _MAC_OPS_CLI_DRY_RUN=true
         shift
         ;;
       --module=*)

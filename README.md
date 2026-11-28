@@ -170,9 +170,11 @@ mac-ops status
 
 `mac-ops status` shows two trash figures: the indexed total (moved to trash, **pending purge** - that space is not reclaimed until the items are purged) and what the trash directory really occupies on disk. `mac-ops purge` logs the measured change in free space (`df`) next to the indexed size, because a `du` figure is not always reclaimable space (APFS clones share blocks).
 
-Before every purge the trash is reconciled with its index: an item that is on disk but missing from the index is re-indexed with its own change time as the trashed time, so it expires after the normal 72 hours instead of staying on disk forever. Stale `.index.json.tmp.*` files (older than one hour) are removed. Nothing unindexed is deleted on sight.
+Before every purge the trash is reconciled with its index. An item that is on disk but missing from the index is re-indexed with the **current** time as its trashed time, so it gets the full 72 hours from the moment it is found; it is marked `"source": "reconcile"` in the index (its change time is kept as `original_time`, for information only) and it is never deleted in the purge pass that found it. Each re-indexed item is logged with its path, size, original time and new expiry. Leftover `.index.json.tmp.*` files (older than one hour, from an interrupted index write) are first searched for entries the index lost: an entry still on disk keeps its recorded trashed time only if that leaves at least 24 hours before it expires, otherwise it is stamped now. The processed files are then moved to `.index-recovery/` inside the trash and are never deleted. Nothing unindexed is deleted on sight.
 
-Moves into the trash are all-or-nothing: a same-volume move is a single atomic rename; if a rename is not possible the copy is verified (entry count and total size) before the source is removed, and on any failure the source stays untouched and the partial copy is removed. A directory that a running process has files open in is skipped (checked against one cached `lsof` list per run; set `MAC_OPS_TRASH_SKIP_OPEN_DIRS=false` to disable).
+`--dry-run` changes nothing on disk for `purge`, `restore`, `install`, `uninstall` and `monitor setup` / `unsetup`: no deletion, no index write, no plist migration, no lock file, no `lsof` cache. Every skipped action is logged as `[DRY_RUN] Will ...`. `list-trash` and `status` never write (they do not migrate legacy metadata or create a missing index). The index is serialized with an fcntl lock (`zsh/system` `zsystem flock` on `.index.flock`), which the kernel releases when its owner exits, so a live owner can never lose it to another process.
+
+Moves into the trash are all-or-nothing: a same-volume move is a single atomic rename; if a rename is not possible the copy is verified (entry count and total size) before the source is removed, and on any failure the source stays untouched and the partial copy is removed. Right before the source is removed it is checked again; if it changed after the copy, the source is kept and the trashed copy is removed. A file, or a directory with anything inside it, that a running process has open is not moved (for example a sqlite database in use). If that cannot be determined because `lsof` is missing or fails, nothing is moved and an error is logged. The check uses one cached `lsof` list per run; set `MAC_OPS_TRASH_SKIP_OPEN_DIRS=false` to disable it.
 
 ### Miscellaneous
 
@@ -260,7 +262,7 @@ mac-ops install
 mac-ops uninstall
 ```
 
-With a Homebrew install the agent is registered with the version-independent `$(brew --prefix)/opt/mac-ops/libexec/bin/mac-ops` path, so it keeps working after `brew upgrade mac-ops`. `mac-ops status` reports an installed plist that points at a file that no longer exists (for example one registered by an older version with a `Cellar/mac-ops/<version>` path) together with the command that fixes it: `mac-ops install` or `mac-ops monitor setup`.
+With a Homebrew install the agent is registered with the version-independent `$(brew --prefix)/opt/mac-ops/libexec/bin/mac-ops` path, so it keeps working after `brew upgrade mac-ops`. `mac-ops status` reports an installed plist whose program path does not exist (BROKEN) or is a versioned `Cellar/mac-ops/<version>` path that the next upgrade deletes (STALE), together with the exact command that fixes it: `mac-ops monitor unsetup && mac-ops monitor setup` for the monitor agent, `mac-ops uninstall && mac-ops install` for the cleanup agent.
 
 ### Method 2: crontab
 
