@@ -114,15 +114,25 @@ _mac_ops_cmd_run() {
   # 1. Initialize directories
   mac_ops_init_dirs
 
+  # Log position at run start: ERROR/WARN lines after it are counted for the
+  # end-of-run notification (a failed run is notified in scheduled mode)
+  local log_start
+  mac_ops_log_line_count; log_start="${REPLY}"
+
   # 2. Load configuration
-  mac_ops_load_config || return 1
+  if ! mac_ops_load_config; then
+    mac_ops_notify_run_end "${log_start}" 1
+    return 1
+  fi
 
   # 3. Log rotation
   mac_ops_log_rotate
+  mac_ops_log_line_count; log_start="${REPLY}"
 
   # 4. Acquire lock - exit on failure
   if ! mac_ops_acquire_lock; then
     mac_ops_log_error "Another mac-ops instance is already running. Exiting."
+    mac_ops_notify_run_end "${log_start}" 1
     return 1
   fi
 
@@ -153,6 +163,7 @@ _mac_ops_cmd_run() {
   if ! mac_ops_run_modules "${target_module}" "${stats_dir}"; then
     [[ -n "${stats_dir}" && "${stats_dir}" == *"/stats_"* ]] && rm -rf "${stats_dir}" 2>/dev/null
     mac_ops_release_lock
+    mac_ops_notify_run_end "${log_start}" 1
     return 1
   fi
 
@@ -172,12 +183,12 @@ _mac_ops_cmd_run() {
   # 12. System report (before/after comparison + cleanup summary)
   mac_ops_print_report "${snapshot_before}" "${snapshot_after}" "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}" "${MAC_OPS_DATA_MOVED_COUNT}"
 
-  # 13. macOS notification (scheduled mode)
+  # 13. macOS notification (scheduled mode; also when ERRORs were logged)
   # Free bytes (df -k) are the second snapshot field
   local before_free after_free _pct _rest
   read -r _pct before_free _rest <<< "${snapshot_before}"
   read -r _pct after_free _rest <<< "${snapshot_after}"
-  mac_ops_notify_completion "${MAC_OPS_CLEANED_COUNT}" "${MAC_OPS_CLEANED_BYTES}" "${MAC_OPS_KILLED_COUNT}" "${before_free}" "${after_free}" "${MAC_OPS_DATA_MOVED_COUNT}"
+  mac_ops_notify_run_end "${log_start}" 0 "${before_free}" "${after_free}"
 }
 
 # =============================================================================

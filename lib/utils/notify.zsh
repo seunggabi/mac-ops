@@ -26,8 +26,10 @@ mac_ops_notify() {
 
 # Build the completion notification text (no side effects; testable)
 # Args: cleaned_count, cleaned_bytes, killed_procs, free_before_bytes (optional),
-#       free_after_bytes (optional), data_moved (optional)
-# Prints the message; prints nothing when there is nothing to report
+#       free_after_bytes (optional), data_moved (optional), errors (optional),
+#       warnings (optional), exit_status (optional)
+# Prints the message; prints nothing when there is nothing to report. A
+# failed run (errors logged or non-zero exit status) is always reported.
 mac_ops_notify_message() {
   local cleaned_count="$1"
   local cleaned_bytes="$2"
@@ -35,10 +37,22 @@ mac_ops_notify_message() {
   local free_before="${4:-}"
   local free_after="${5:-}"
   local data_moved="${6:-0}"
+  local errors="${7:-0}"
+  local warnings="${8:-0}"
+  local exit_status="${9:-0}"
   local message_parts=()
+  local failed=false
+  [[ "${errors}" != "0" || "${exit_status}" != "0" ]] && failed=true
 
-  if [[ "${cleaned_count:-0}" == "0" && "${killed_procs:-0}" == "0" ]]; then
+  if [[ "${failed}" == false && "${cleaned_count:-0}" == "0" && "${killed_procs:-0}" == "0" ]]; then
     return 0
+  fi
+
+  if [[ "${exit_status}" != "0" ]]; then
+    message_parts+=("Run failed (exit status ${exit_status})")
+  fi
+  if [[ "${failed}" == true ]]; then
+    message_parts+=("${errors} errors, ${warnings} warnings logged (see ${MAC_OPS_LOG_FILE})")
   fi
 
   if [[ -n "$cleaned_count" && "$cleaned_count" != "0" ]]; then
@@ -63,10 +77,26 @@ mac_ops_notify_message() {
 
 # Cleanup completion notification
 # Args: same as mac_ops_notify_message
-# Do not notify if no items were cleaned (count is 0)
+# Do not notify if nothing was cleaned and the run did not fail
 mac_ops_notify_completion() {
-  local message
+  local message title="Mac-Ops Cleanup Completed"
   message=$(mac_ops_notify_message "$@")
   [[ -z "$message" ]] && return 0
-  mac_ops_notify "Mac-Ops Cleanup Completed" "$message"
+  [[ "${7:-0}" != "0" || "${9:-0}" != "0" ]] && title="Mac-Ops Run Had Errors"
+  mac_ops_notify "$title" "$message"
+}
+
+# End-of-run notification: counts ERROR/WARN lines written to the log since
+# line <log_start> (parallel modules included) and notifies; a run that
+# failed is notified even when nothing was cleaned.
+# Args: log_start, exit_status, free_before_bytes (optional), free_after_bytes (optional)
+# Uses MAC_OPS_CLEANED_COUNT, MAC_OPS_CLEANED_BYTES, MAC_OPS_KILLED_COUNT,
+# MAC_OPS_DATA_MOVED_COUNT.
+mac_ops_notify_run_end() {
+  local log_start="$1" exit_status="${2:-0}" errors warnings
+  mac_ops_log_count_since "${log_start}" ERROR; errors="${REPLY}"
+  mac_ops_log_count_since "${log_start}" WARN; warnings="${REPLY}"
+  mac_ops_notify_completion "${MAC_OPS_CLEANED_COUNT:-0}" "${MAC_OPS_CLEANED_BYTES:-0}" \
+    "${MAC_OPS_KILLED_COUNT:-0}" "${3:-}" "${4:-}" "${MAC_OPS_DATA_MOVED_COUNT:-0}" \
+    "${errors}" "${warnings}" "${exit_status}"
 }

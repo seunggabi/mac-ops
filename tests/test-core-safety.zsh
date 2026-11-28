@@ -755,6 +755,53 @@ test_notify_message_honest() {
 test_report_wording_honest
 test_notify_message_honest
 
+print ""
+
+# =============================================================================
+# Failure notification (item 12): osascript is replaced by a recording stub
+# =============================================================================
+OSA_CALLS="${TEST_TMPDIR}/osascript.calls"
+osascript() { print -r -- "$*" >> "${OSA_CALLS}"; }
+
+_t12_run_end() {
+    : > "${OSA_CALLS}"
+    MAC_OPS_CLEANED_COUNT=0 MAC_OPS_CLEANED_BYTES=0 MAC_OPS_KILLED_COUNT=0 MAC_OPS_DATA_MOVED_COUNT=0
+    MAC_OPS_SCHEDULED=true mac_ops_notify_run_end "$1" "$2" 1000 1000
+}
+
+test_failure_notification() {
+    print "[TEST] failure_notification"
+    local start calls
+    mkdir -p "${MAC_OPS_LOG_DIR}"
+
+    # ERROR from a parallel module subshell, zero items, exit status 0
+    mac_ops_log_line_count; start="${REPLY}"
+    ( MAC_OPS_SCHEDULED=true; mac_ops_log_error "module failed: boom"; mac_ops_log_warn "something odd" )
+    _t12_run_end "${start}" 0
+    calls=$(cat "${OSA_CALLS}")
+    assert_output_contains "${calls}" "Mac-Ops Run Had Errors" "ERROR with zero items: notification sent"
+    assert_output_contains "${calls}" "1 errors, 1 warnings logged" "notification counts ERROR and WARN lines since run start"
+
+    # Clean zero-item run (INFO only): no notification
+    mac_ops_log_line_count; start="${REPLY}"
+    ( MAC_OPS_SCHEDULED=true; mac_ops_log_info "all fine" )
+    _t12_run_end "${start}" 0
+    assert_eq "$(grep -c . "${OSA_CALLS}")" "0" "clean zero-item run: no notification"
+
+    # Non-zero exit status without an ERROR line
+    mac_ops_log_line_count; start="${REPLY}"
+    _t12_run_end "${start}" 1
+    assert_output_contains "$(cat "${OSA_CALLS}")" "Run failed (exit status 1)" "non-zero exit: notification sent"
+
+    # Interactive (not scheduled) runs never call osascript
+    : > "${OSA_CALLS}"
+    MAC_OPS_SCHEDULED=false mac_ops_notify_run_end 0 1 >/dev/null 2>&1
+    assert_eq "$(grep -c . "${OSA_CALLS}")" "0" "interactive run: no notification"
+}
+
+test_failure_notification
+unset -f osascript
+
 # --- Teardown ---
 rm -rf "${TEST_TMPDIR}"
 
