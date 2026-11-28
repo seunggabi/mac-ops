@@ -12,9 +12,7 @@ Thank you for your interest in contributing to mac-ops! This guide will help you
 
 2. **Run tests** to ensure everything works
    ```bash
-   zsh tests/test-trash.zsh
-   zsh tests/test-safety.zsh
-   zsh tests/test-modules.zsh
+   for t in tests/test-*.zsh; do HOME=$(mktemp -d) zsh "$t" || break; done
    ```
 
 3. **Try a dry run** to see the tool in action
@@ -45,9 +43,9 @@ mac-ops/
 ├── bin/
 │   └── mac-ops              # CLI entry point with strict mode (ERR_EXIT, PIPE_FAIL)
 ├── lib/
-│   ├── core/                # Core functions (module execution, dry-run)
+│   ├── core/                # Config, logging, lock, trash, safety, run lifecycle, dispatch
 │   ├── modules/             # Cleanup modules (cache, tmp, log, zombie, etc.)
-│   └── utils/               # Shared utilities (logging, color, trash, safety)
+│   └── utils/               # Shared helpers (formatting, notifications, running-app and security checks)
 ├── config/
 │   └── default.plist        # Default configuration for modules
 ├── launchd/                 # Scheduled execution setup
@@ -58,9 +56,9 @@ mac-ops/
 ### Key Directories
 
 - **bin/**: Entry point handling CLI arguments, module discovery, and execution
-- **lib/core/**: Core execution logic for running modules and managing dry-run mode
+- **lib/core/**: Configuration, logging, locking, the trash and its index, safety checks, run lifecycle and module dispatch
 - **lib/modules/**: Individual cleanup modules (each handles one cleanup task)
-- **lib/utils/**: Shared utilities for logging, colors, trash management, process safety
+- **lib/utils/**: Shared helpers: size formatting and colors, notifications, running-app detection, security keywords
 - **config/**: Default configuration via plist (module settings, exclusions, paths)
 - **tests/**: Comprehensive test suites using custom assertions
 
@@ -75,6 +73,7 @@ This ensures the script exits on any error and catches pipe failures.
 
 ### Variable Declaration
 - All variables must be declared with `local` inside functions
+- Declare `local` variables at the top of the function, never inside a loop: re-running `local name` on an already declared variable makes zsh print its value to stdout
 - Global variables should be avoided when possible
 - Use descriptive names in lowercase with underscores
 
@@ -195,11 +194,9 @@ mac-ops uses a custom lightweight test framework with these assertion functions:
 
 ### Running Tests
 
-Run all tests:
+Run all tests (each with a throwaway HOME):
 ```bash
-zsh tests/test-trash.zsh
-zsh tests/test-safety.zsh
-zsh tests/test-modules.zsh
+for t in tests/test-*.zsh; do HOME=$(mktemp -d) zsh "$t" || break; done
 ```
 
 Run a specific test file:
@@ -211,7 +208,6 @@ zsh tests/test-modules.zsh
 - Tests use temporary directories created with `mktemp -d`
 - Tests never touch real system directories
 - Cleanup is automatic; no manual intervention needed
-- All 64 tests pass reliably
 
 ### Writing Good Tests
 - Use temporary directories for all file operations

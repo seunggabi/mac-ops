@@ -497,6 +497,7 @@ mac-ops/
 │   ├── core/                      # Core utilities
 │   │   ├── config.zsh             # Settings registry and config.plist loader
 │   │   ├── dispatch.zsh           # Module selection (Enabled flags) and dispatch
+│   │   ├── run.zsh                # Run ID, run manifests, runs/status health, restore --run
 │   │   ├── trash.zsh              # Trash management
 │   │   ├── logger.zsh             # Logging
 │   │   ├── lock.zsh               # Prevent duplicate execution
@@ -517,11 +518,13 @@ mac-ops/
 │   │   ├── analyze.zsh
 │   │   └── monitor.zsh
 │   └── utils/                     # Shared utilities
-│       ├── format.zsh
-│       ├── notify.zsh
-│       ├── parallel.zsh
+│       ├── format.zsh             # Size formatting, colors, run report
+│       ├── notify.zsh             # macOS notifications
+│       ├── parallel.zsh           # Wait for parallel modules with a timeout
 │       ├── plist-helper.zsh
-│       └── snapshot.zsh
+│       ├── running.zsh            # Running process / running app detection
+│       ├── security-keywords.zsh  # Security software keywords (never touched)
+│       └── snapshot.zsh           # Disk/memory snapshot before and after a run
 ├── config/                        # Configuration files
 │   ├── default.plist              # Every setting with its default (copy to ~/.mac-ops/config.plist)
 │   └── ignore.example             # Example ignore file template
@@ -530,11 +533,15 @@ mac-ops/
 ├── demo/                          # Demo and example files
 ├── .github/                       # GitHub workflows and templates
 └── tests/                         # Test suites
-    ├── test-trash.zsh             # 18 trash system tests
-    ├── test-safety.zsh            # 24 safety protection tests
-    ├── test-modules.zsh           # 22 module tests
-    ├── e2e/                       # 44 end-to-end tests
-    └── timeout/                   # 6 timeout handling tests
+    ├── test-trash.zsh             # Trash, index, restore and purge
+    ├── test-safety.zsh            # Protected paths and processes, size guard
+    ├── test-core-safety.zsh       # Config loading, CLI precedence, module flags, settings
+    ├── test-modules.zsh           # Module behaviour
+    ├── test-module-safety.zsh     # docker, zombie, dev, cache, orphan-app, brew safety
+    ├── test-file-cleanup.zsh      # tmp, log, cache, browser, dev protection
+    ├── test-orphan-killer.zsh     # Orphan process candidate rules
+    ├── test-timeout.zsh           # Parallel module timeout
+    └── test-e2e.zsh               # End-to-end CLI runs
 ```
 
 ## Contributing
